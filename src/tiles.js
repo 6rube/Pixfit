@@ -79,16 +79,18 @@ export function buildTileset(terrainA, terrainB, options={}, sprites=[]) {
     // A signed distance in pixels makes both border width and cutoff independent of tile resolution.
     for(let y=0;y<height;y++)for(let x=0;x<width;x++) {
       const u=(x+.5)/width,v=(y+.5)/height;
-      let distance;
+      let distance,normalX=0,normalY=1;
       if(spec.kind!=='terrain') {
         const sx=spec.orientation&1?1-u:u,sy=spec.orientation&2?1-v:v;
         distance=(sy-sx)*width/Math.SQRT2;
+        normalX=spec.orientation&1?1:-1;normalY=(spec.orientation&2?-1:1)*width/height;
       } else if(spec.mask===0&&options.mode!=='blob')distance=-Infinity;
       else if(spec.mask===(options.mode==='blob'?255:15))distance=Infinity;
       else {
         const f=fieldAt(spec.mask,options.mode,u,v),delta=.001;
         const dx=(fieldAt(spec.mask,options.mode,u+delta,v)-fieldAt(spec.mask,options.mode,u-delta,v))/(2*delta*width);
         const dy=(fieldAt(spec.mask,options.mode,u,v+delta)-fieldAt(spec.mask,options.mode,u,v-delta))/(2*delta*height);
+        normalX=dx;normalY=dy;
         distance=f/Math.max(.001,Math.hypot(dx,dy));
       }
       distance-=cutoff;
@@ -96,7 +98,13 @@ export function buildTileset(terrainA, terrainB, options={}, sprites=[]) {
       let useA=distance>=0;
       if(mixed&&borderType==='dither')useA=distance/borderWidth+.5>[.125,.625,.875,.375][(y%2)*2+x%2];
       let color=useA?sampleA(x,y):sampleB(x,y);
-      if(mixed&&borderType==='texture'&&borderTexture){const border=sampleBorder(x,y);color=blendPixel(color,border);}
+      if(mixed&&borderType==='texture'&&borderTexture){
+        // Repeat the strip along the edge; fit its entire height across the band.
+        // Source rows run from outer terrain (top) to inner terrain (bottom).
+        const along=Math.abs(normalX)>Math.abs(normalY)?y:x;
+        const across=clamp(Math.floor((distance/borderWidth+.5)*borderTexture.height),0,borderTexture.height-1);
+        color=blendPixel(color,sampleBorder(along,across));
+      }
       pixels[y*width+x]=color;
     }
     let image=transformImage({pixels,width,height},opts.rotation||0,opts.flipX,opts.flipY);

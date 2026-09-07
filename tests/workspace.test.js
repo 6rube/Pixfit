@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSprite, hexToColor, uid, shapeSelection } from '../src/core.js';
 import { buildTileset, tileDescriptors, extractTile, transformImage, transformMask, selectionClipboard, pastePixels, animatedTileIndex } from '../src/tiles.js';
-import { makeTilemap, paintMap, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
+import { makeTilemap, paintMap, paintTerrain, resolveTerrain, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
 import { serializeWorkspace, parseWorkspace, cleanTile } from '../src/storage.js';
 import { createDemo } from '../src/demo.js';
 import { godotPackage, zipFiles } from '../src/godot.js';
@@ -21,6 +21,19 @@ test('pixel cutoff moves the boundary and a third texture occupies the transitio
   const a=terrain(red),b=terrain(blue),c=terrain(yellow),options={size:16,columns:8,border:4,borderType:'texture',borderTexture:c.id};
   const t=buildTileset(a,b,options,[a,b,c]);assert.ok(extractTile(t,3).pixels.includes(yellow));assert.equal(extractTile(t,15).pixels.filter(v=>v===yellow).length,0);
   const normal=atlas(),shrunk=atlas({cutoff:3});assert.ok(extractTile(shrunk,3).pixels.filter(v=>v===red).length<extractTile(normal,3).pixels.filter(v=>v===red).length);
+});
+test('border strips use their full height across the band and repeat along horizontal and vertical edges',()=>{
+  const a=terrain(red),b=terrain(blue),strip=makeSprite('Border strip',2,4);
+  const colors=['#101010','#202020','#303030','#404040','#505050','#606060','#707070','#808080'].map(hexToColor);
+  strip.layers[0].pixels.set(colors);
+  const t=buildTileset(a,b,{size:16,columns:8,border:4,borderType:'texture',borderTexture:strip.id},[strip]);
+  const top=extractTile(t,3).pixels,right=extractTile(t,6).pixels;
+  for(let along=0;along<16;along++)for(let across=0;across<4;across++){
+    assert.equal(top[(9-across)*16+along],colors[across*2+along%2]);
+    assert.equal(right[along*16+6+across],colors[across*2+along%2]);
+  }
+  assert.equal(top[5*16],red);assert.equal(top[10*16],blue);
+  assert.equal(right[5],blue);assert.equal(right[10],red);
 });
 test('per-tile overrides affect only the chosen tile and transformed masks match rotation/flips',()=>{
   const original=atlas(),modified=atlas({overrides:{3:{cutoff:4,borderType:'none'}}});assert.notDeepEqual(extractTile(original,3).pixels,extractTile(modified,3).pixels);assert.deepEqual(extractTile(original,2).pixels,extractTile(modified,2).pixels);
@@ -43,6 +56,35 @@ test('tilemaps paint, erase, fill, composite layers and resize without corruptin
   assert.equal(renderTilemap(m,t).pixels[0],red);paintMap(m,l,1,1,0,'erase');assert.equal(l.cells[5],0);
   const top=mapLayer(4,3,'Water');m.layers.push(top);paintMap(m,top,0,0,0);assert.equal(renderTilemap(m,t).pixels[0],blue);top.visible=false;assert.equal(renderTilemap(m,t).pixels[0],red);
   const resized=resizeTilemap(m,2,2);assert.equal(resized.layers[0].cells.length,4);assert.equal(resized.layers[0].cells[3],0);assert.throws(()=>makeTilemap('Too large',257,3,t));
+});
+test('autoterrain updates blob neighbors and erasing disconnects them',()=>{
+  const t=atlas({mode:'blob'}),m=makeTilemap('Terrain',5,5,t),l=m.layers[0];
+  const paint=(x,y,tool)=>{paintTerrain(m,l,t,x,y,3,tool);resolveTerrain(m,l,t);};
+  const mask=(x,y)=>t.masks[l.cells[y*m.width+x]-1];
+  paint(2,2);assert.equal(mask(2,2),0);
+  paint(3,2);assert.equal(mask(2,2),2);assert.equal(mask(3,2),8);
+  paint(2,1);paint(3,1);assert.equal(mask(2,2),19);
+  paint(3,2,'erase');assert.equal(mask(2,2),1);assert.equal(l.cells[13],0);
+  paint(0,0,'fill');assert.ok(l.terrain.every(v=>v===3));assert.equal(mask(2,2),255);
+});
+test('corner autoterrain connects four tiles over a texture and restores the background on erase',()=>{
+  const t=atlas(),m=makeTilemap('Corners',4,4,t),l=m.layers[0];
+  m.textures=[{name:'Inside',width:1,height:1,pixels:[red]},{name:'Outside',width:1,height:1,pixels:[blue]}];
+  paintTerrain(m,l,t,0,0,2,'fill');resolveTerrain(m,l,t);
+  assert.ok(renderTilemap(m,t).pixels.every(v=>v===blue));
+  paintTerrain(m,l,t,2,2,3);resolveTerrain(m,l,t);
+  assert.deepEqual([5,6,9,10].map(i=>t.masks[l.cells[i]-1]),[4,8,2,1]);
+  paintTerrain(m,l,t,2,2,2);resolveTerrain(m,l,t);
+  assert.ok(renderTilemap(m,t).pixels.every(v=>v===blue));
+});
+test('texture brushes and terrain intent survive backups and resizing',()=>{
+  const w=createDemo(),t=atlas({mode:'blob'}),m=makeTilemap('Saved terrain',4,4,t),l=m.layers[0];w.tilesets=[t];w.tilemaps=[m];
+  m.textures=[{name:'Pattern',width:2,height:1,pixels:[red,yellow]},{name:'Outside',width:1,height:1,pixels:[blue]}];
+  paintTerrain(m,l,t,0,0,1);paintTerrain(m,l,t,2,2,3);resolveTerrain(m,l,t);
+  const frame=renderTilemap(m,t);assert.deepEqual(Array.from(frame.pixels.slice(0,4)),[red,yellow,red,yellow]);
+  const restored=parseWorkspace(JSON.parse(JSON.stringify(serializeWorkspace(w)))).tilemaps[0];
+  assert.deepEqual(restored,m);assert.deepEqual(renderTilemap(restored,t),frame);
+  const resized=resizeTilemap(m,5,5);assert.equal(resized.layers[0].terrain[12],3);assert.equal(resized.layers[0].terrain[0],1);
 });
 test('animated map tiles resolve frame sequence by FPS',()=>{
   const t=atlas();t.animations={0:{frames:[0,15],fps:2}};assert.equal(animatedTileIndex(t,0,.1),0);assert.equal(animatedTileIndex(t,0,.6),15);assert.equal(animatedTileIndex(t,0,1.1),0);

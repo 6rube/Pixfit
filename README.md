@@ -58,6 +58,8 @@ Keyboard shortcuts are available under **Shortcuts & help**. On small screens, t
 7. Click a tile to override its border type, texture, width, cutoff, quarter-turn rotation, or X/Y flips in the inspector. **Reset** restores the shared settings. Transforms update the connection mask as well as the pixels. Imported atlases support direct rotation/flips; use terrain generation to create texture borders.
 8. Use the tile in a map, or export PNG, atlas JSON, or a Godot 4 package. Tileset documents autosave in the library.
 
+For a transition texture, draw a horizontal border strip: its width repeats along the boundary and its full height scales to the border width using nearest-neighbor sampling. The top of the strip faces the outer terrain and the bottom faces the inner terrain. Transparent pixels reveal the terrain underneath.
+
 Changes to the configuration update the preview automatically. **Generate tileset** recomposites from the current source artwork. **Open in tileset builder** creates a tileset document using the active sprite as its inner terrain source. You can keep several independent tileset documents open.
 
 ### Animated tiles
@@ -80,13 +82,13 @@ The resource format follows Godot's [TileSetAtlasSource API](https://docs.godote
 
 ## Tilemap editor
 
-Create a map from Library, the **+** document menu, or **Use in map** in a tileset. Choose a saved tileset and dimensions in cells. Paint by clicking or dragging, erase with the eraser or right-click, fill connected areas, draw filled rectangles, and pick a placed tile with the picker or Ctrl + click. Space + drag pans; scroll zooms.
+Create a map from Library, the **+** document menu, or **Use in map** in a tileset. Choose a generated terrain set and dimensions in cells. The palette offers its two source textures and one autotile brush. Paint by clicking or dragging, erase with the eraser or right-click, fill connected areas, draw filled rectangles, and pick a terrain brush with the picker or Ctrl + click. Space + drag pans; scroll zooms.
 
-Maps use a rectangular cell grid, independent layers, layer visibility/opacity/order, resizing, and their own undo/redo history. The tile palette includes generated slopes and animations. Multi-cell artwork is anchored at the top left and may overlap neighboring placements. Map animation previews use the tileset's frame definitions.
+Texture brushes repeat the source artwork at its native pixel size. Blob autotiles choose edges and corners from neighboring terrain; corner autotiles paint junctions shared by four tiles. Painting and erasing update those connections automatically. Texture snapshots and terrain brush choices are saved with the map. Maps have independent layers, visibility/opacity/order, resizing, and undo/redo. Existing manually placed tiles, slopes, and animations remain supported, but are no longer listed as individual palette choices. Imported atlases have no terrain rules; select a generated set to use terrain brushes.
 
 Map limits are 256 cells per side, 16 layers, and a rendered image no larger than 4096 pixels per side or 16 million pixels. Changing the source tileset keeps tile numbers; numbers absent from the new source become empty. Regeneration is blocked if removing tiles would invalidate a map that uses them. A tileset referenced by a map must be reassigned or its maps removed before it can be deleted.
 
-Export a still PNG or a ZIP containing the map's layer/cell JSON, its atlas PNG and metadata, and a rendered PNG. Map packages are intended for game tooling; use a full workspace backup to restore editable maps in Pixfit.
+Export a still PNG or a ZIP containing the map's layer/cell JSON, its atlas PNG and metadata, and a rendered PNG. Version 2 map packages also include texture snapshots and per-layer terrain brush data (0: legacy tile, 1/2: source texture, 3: autoterrain, 4: empty, 5: generated corner fringe). Texture cells with no atlas tile render from the corresponding texture snapshot. Map packages are intended for game tooling; use a full workspace backup to restore editable maps in Pixfit.
 
 ## Storage and backups
 

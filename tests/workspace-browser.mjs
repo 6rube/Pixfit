@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-const browser=await chromium.launch({channel:'chrome',headless:true});
+const browser=await chromium.launch({...process.env.PIXFIT_BROWSER?{executablePath:process.env.PIXFIT_BROWSER}:{channel:'chrome'},headless:true});
 const context=await browser.newContext({viewport:{width:1440,height:1000}});
 const page=await context.newPage(),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
@@ -17,6 +17,7 @@ const change=async(id,value)=>{await page.fill(`#${id}`,String(value));await pag
 const save=async()=>{await page.waitForFunction(()=>document.querySelector('#save-status')?.textContent.includes('All changes saved'));};
 try {
   await page.goto('http://127.0.0.1:5173');await page.locator('#art-canvas').waitFor();await save();
+  assert.equal(await page.isChecked('#sprite-repeat-preview'),false);await page.check('#sprite-repeat-preview');assert.equal(await page.locator('#repeat-preview').isVisible(),true);assert.equal(await page.locator('#canvas-position').isVisible(),true);await page.click('[data-tool="pencil"]');await clickPixel(0,0);assert.equal((await pixel(0,0))[3],255);await page.uncheck('#sprite-repeat-preview');assert.equal(await page.locator('#repeat-preview').isVisible(),false);
   await page.screenshot({path:'.screenshots/pixfit-desktop.png',fullPage:true});
   assert.equal(await page.locator('.layer-row').count(),3);assert.equal(await page.locator('.app-footer [data-action="backup"]').count(),0);
   const edit=await page.locator('.edit-layer-actions').boundingBox(),list=await page.locator('.layer-list').boundingBox(),add=await page.locator('.add-layer-bar').boundingBox();assert.ok(edit.y<list.y&&add.y>list.y);
@@ -41,7 +42,7 @@ try {
   await page.fill('#animation-frames','2, 3, 4');await page.fill('#animation-fps','6');await action('save-animation');assert.equal(await page.locator('#animation-frames').inputValue(),'2, 3, 4');await page.screenshot({path:'.screenshots/pixfit-tilesets.png',fullPage:true});
   const [godot]=await Promise.all([page.waitForEvent('download'),action('godot-export')]);await godot.saveAs('.screenshots/godot4-export.zip');
   await action('tiles-to-map');await page.fill('[name="name"]','Meadow world');await page.fill('[name="width"]','8');await page.fill('[name="height"]','6');await page.click('#dialog button[type="submit"]');
-  assert.equal(await page.locator('.map-tile-palette button').count(),55);await page.click('[data-action="map-tile"][data-index="15"]');await clickPixel(24,24);assert.ok((await pixel(24,24))[3]>0);
+  assert.equal(await page.locator('.map-tile-palette button').count(),3);await page.click('[data-action="map-tile"][data-index="3"]');await clickPixel(24,24);assert.ok((await pixel(24,24))[3]>0);
   await shortcut('Control+z');assert.equal((await pixel(24,24))[3],0);await shortcut('Control+Shift+z');assert.ok((await pixel(24,24))[3]>0);
   await page.click('[data-action="map-tool"][data-tool="fill"]');await clickPixel(8,8);assert.ok((await pixel(120,88))[3]>0);
   await action('map-add-layer');assert.equal(await page.locator('.layer-row').count(),2);await page.click('[data-action="map-tile"][data-index="1"]');await page.click('[data-action="map-tool"][data-tool="paint"]');await clickPixel(40,40);

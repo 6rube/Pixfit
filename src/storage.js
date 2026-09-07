@@ -6,7 +6,7 @@ export const MAX_WORKSPACE_PIXELS = 32_000_000;
 export function workspacePixelCount(workspace) {
   return workspace.sprites.reduce((n, s) => n + s.width * s.height * s.layers.length, 0)
     + workspace.tilesets.reduce((n, t) => n + t.width * t.height, 0)
-    + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length,0);
+    + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length+m.layers.reduce((n,l)=>n+(l.terrain?.length||0),0)+(m.textures||[]).reduce((n,t)=>n+t.width*t.height,0),0);
 }
 export const DEFAULT_SETTINGS = { color: '#738b51', secondaryColor: '#f3dfb0', brushSize: 1, mirrorX: false, mirrorY: false, dither: false, grid: false, palette: 'woodland', pasteNewLayer: true, tile: { size: 16, columns: 8, mode: 'wang', border: 1, borderType:'dither', borderTexture:'', cutoff:0, slopes1:false, slopes2:false, overrides:{}, isometric: false, gap: false, terrainA: '', terrainB: '' } };
 const validColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
@@ -16,7 +16,7 @@ export function serializeWorkspace(workspace) {
     activeId: workspace.activeId, settings: workspace.settings, palettes: workspace.palettes,
     sprites: workspace.sprites.map(sprite => ({ ...sprite, layers: sprite.layers.map(layer => ({ ...layer, pixels: encodePixels(layer.pixels) })) })),
     tilesets: workspace.tilesets.map(tile => ({ ...tile, pixels: encodePixels(tile.pixels) })),
-    tilemaps: (workspace.tilemaps||[]).map(m=>({...m,layers:m.layers.map(l=>({...l,cells:encodePixels(l.cells)}))})),
+    tilemaps: (workspace.tilemaps||[]).map(m=>({...m,layers:m.layers.map(l=>({...l,cells:encodePixels(l.cells),...(l.terrain?{terrain:encodePixels(l.terrain)}:{})}))})),
     session: workspace.session || {tabs:[workspace.activeId],activeTab:workspace.activeId,view:'pixel'},
   };
 }
@@ -66,8 +66,18 @@ export function parseWorkspace(data) {
     validateMapSize(width,height,cellWidth,cellHeight);
     const atlas=tilesets.find(t=>t.id===m.tilesetId);if(!atlas)throw new Error('A tilemap references a missing tileset.');
     if(!Array.isArray(m.layers)||!m.layers.length||m.layers.length>16)throw new Error('Invalid map layer count.');
-    const layers=m.layers.map(l=>{const cells=decode(l.cells,width*height);if(cells.some(c=>c>atlas.masks.length))throw new Error('A map contains an invalid tile.');return {id:id(l.id),name:name(l.name),visible:l.visible!==false,opacity:Number.isFinite(l.opacity)?Math.max(0,Math.min(100,l.opacity)):100,cells};});
-    return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas.id,layers,activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
+    let textures;
+    if(m.textures!==undefined){
+      if(!Array.isArray(m.textures)||m.textures.length!==2)throw new Error('Invalid map textures.');
+      textures=m.textures.map(t=>{
+        const width=size(t.width,512),height=size(t.height,512);
+        if(!Array.isArray(t.pixels)||t.pixels.length!==width*height||t.pixels.some(p=>!Number.isInteger(p)||p<0||p>0xffffffff))throw new Error('Invalid map texture pixels.');
+        pixelBudget+=width*height;if(pixelBudget>MAX_WORKSPACE_PIXELS)throw new Error('This backup is too large.');
+        return {name:name(t.name),width,height,pixels:[...t.pixels]};
+      });
+    }
+    const layers=m.layers.map(l=>{const cells=decode(l.cells,width*height);if(cells.some(c=>c>atlas.masks.length))throw new Error('A map contains an invalid tile.');const result={id:id(l.id),name:name(l.name),visible:l.visible!==false,opacity:Number.isFinite(l.opacity)?Math.max(0,Math.min(100,l.opacity)):100,cells};if(l.terrain!==undefined){result.terrain=decode(l.terrain,width*height);if(result.terrain.some(v=>v>5)||(!textures&&result.terrain.some(v=>v===1||v===2)))throw new Error('Invalid terrain brush data.');}return result;});
+    return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas.id,layers,...(textures?{textures}:{}),activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
   });
   const raw = data.settings || {}, settings = { ...DEFAULT_SETTINGS, tile: cleanTile(raw.tile) };
   for (const key of ['color', 'secondaryColor']) if (validColor(raw[key])) settings[key] = raw[key];
