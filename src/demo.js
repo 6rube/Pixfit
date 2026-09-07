@@ -76,5 +76,5 @@ export function createDemo() {
     if(y%5===0 || (x+(Math.floor(y/5)%2)*4)%8===0) stone.layers[0].pixels[y*16+x]=hexToColor('#737d75');
     else if(y%5===1) stone.layers[0].pixels[y*16+x]=hexToColor('#c5c6ae');
   }
-  return { sprites: [sprite,grass,water,stone], tilesets: [], activeId: sprite.id, palettes: { custom: [] }, settings: { ...DEFAULT_SETTINGS, tile: { ...DEFAULT_SETTINGS.tile, terrainA: grass.id, terrainB: water.id } } };
+  return { sprites: [sprite,grass,water,stone], tilesets: [], activeId: sprite.id, palettes: { custom: [], saved: [] }, settings: { ...DEFAULT_SETTINGS, tile: { ...DEFAULT_SETTINGS.tile, terrainA: grass.id, terrainB: water.id } } };
 }

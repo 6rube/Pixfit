@@ -23,9 +23,9 @@ All application URLs are relative, so repository subpaths and custom domains wor
 
 ## Library and document tabs
 
-**Library** is a full workspace page alongside Pixel editor, Tileset builder, and Tilemap editor. Search and filter sprites, tilesets, and tilemaps, or create, import, duplicate, and open assets. Each document opens in its own tab. The **+** button opens a new sprite, tileset, or map.
+Open **Library** beside **Export** at the top right. Search and filter sprites, tilesets, and tilemaps, or create, import, duplicate, and open assets. Opening an asset selects its editor automatically. Each document opens in its own tab. The **+** button opens a new sprite, tileset, or map.
 
-Closing a tab does not delete its asset. Open tabs and the active document are restored after reloading, and included in workspace backups. Views and selections are retained when switching between open tabs during a session; each document has its own undo history.
+The site opens in Library on every visit or reload. Saved documents and open tabs are retained; open an asset to continue editing. Closing a tab does not delete its asset. Views and selections are retained when switching between open tabs during a session; each document has its own undo history.
 
 Full workspace export/import is under **Settings**, accessed with the sliders button at the top right. The main **Export** button exports only the current document.
 
@@ -40,12 +40,14 @@ Full workspace export/import is under **Settings**, accessed with the sliders bu
 - **Ctrl/Cmd+C**, **Ctrl/Cmd+X**, and **Ctrl/Cmd+V** copy, cut, and paste the active layer through the current selection, including ellipse or exact-color selections. The clipboard works across sprite tabs. Enable **Paste into a new layer** to create a layer on paste, or uncheck it to paste into the current layer. The checkbox persists. Pasting into an existing selection respects its boundary; pasted pixels are selected and can be moved immediately. The clipboard is internal to Pixfit and lasts for the session.
 - Move the active layer or selection; **Space + drag** or the hand tool pans the workspace without bounds. Artwork remains within its defined dimensions; moving outside them clips pixels and is undoable.
 - Canvas resize with top-left anchoring, or nearest-neighbor artwork scaling, up to **512 × 512**.
-- Three built-in palettes, custom palette colors, editable hex colors, and swappable foreground/background colors. Right-click paints with the background color.
+- Three built-in palettes, the original **My palette** collection, and up to 32 named palettes with 128 colors each. Use the controls below the palette selector to create, edit, duplicate, import, export, or delete a palette. Edit names and colors using hex fields or color pickers, and add or remove swatches. Editing a built-in palette creates a personal copy. Right-click paints with the background color.
 - PNG, JPEG, WebP, BMP, and first-frame GIF import as a new sprite or layer. Oversized images can be scaled down during import.
 - Transparent PNG export at 1×, 2×, 4×, or 8×.
 - Undo/redo with a memory-bounded history. Selections, undo history, zoom, and viewport position last for the editing session.
 
 Keyboard shortcuts are available under **Shortcuts & help**. On small screens, the layers button in the canvas toolbar opens the preview and layer inspector.
+
+Palette import/export uses **Pixfit palette JSON** (`.palette.json`) and includes the palette name and colors. Imported palettes are added as new collections. Named palettes and the selected palette also persist across reloads and full workspace backups. Deleting a palette does not change painted artwork.
 
 ## Tileset builder
 

@@ -18,8 +18,8 @@ const saved=async()=>{
   })));
 };
 try{
-  await page.goto('http://127.0.0.1:5173');await page.locator('#art-canvas').waitFor();
-  await page.click('.workspace-nav [data-action="tiles"]');await page.selectOption('#tile-mode','blob');
+  await page.goto('http://127.0.0.1:5173');await page.locator('.library-page').waitFor();await page.locator('.library-open').first().click();await page.locator('#art-canvas').waitFor();
+  await page.click('.header-actions [data-action="library"]');await page.click('.library-creation [data-action="new-tileset"]');await page.selectOption('#tile-mode','blob');
   await action('tiles-to-map');await page.fill('[name="width"]','4');await page.fill('[name="height"]','4');await page.click('#dialog button[type="submit"]');
   assert.equal(await page.locator('.terrain-brushes button').count(),3);
   await page.click('[data-action="map-tile"][data-index="3"]');await paint(1,1);await paint(2,1);
@@ -29,7 +29,7 @@ try{
   w=await saved();m=w.tilemaps[0];assert.equal(t.masks[m.layers[0].cells[5]-1],0);assert.equal(m.layers[0].cells[6],0);
   await page.click('[data-action="map-tile"][data-index="1"]');await paint(0,0);
   w=await saved();assert.equal(w.tilemaps[0].layers[0].terrain[0],1);assert.ok(w.tilemaps[0].textures[0].pixels.length);
-  await page.reload();await page.locator('.terrain-brushes').waitFor();
+  await page.reload();await page.locator('.library-page').waitFor();await page.locator('.library-open').filter({hasText:'Untitled world'}).click();await page.locator('.terrain-brushes').waitFor();
   const restored=await saved();assert.deepEqual(restored.tilemaps[0].layers,w.tilemaps[0].layers);assert.deepEqual(restored.tilemaps[0].textures,w.tilemaps[0].textures);
   await page.click('[data-action="map-tile"][data-index="3"]');await page.click('[data-action="map-tool"][data-tool="fill"]');await paint(3,3);
   w=await saved();assert.equal(w.tilemaps[0].layers[0].terrain[0],1);assert.equal(w.tilemaps[0].layers[0].terrain[15],3);

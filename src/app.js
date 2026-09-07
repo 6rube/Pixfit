@@ -1,6 +1,7 @@
 import { uid, clamp, rgba, colorToHex, hexToColor, makeSprite, makeLayer, cloneSprite, composite, imageBytes, pixelsFromBytes, linePoints, stamp, floodFill, shapeSelection, translatePixels, resizeSprite, generateTileset } from './core.js';
 import { loadWorkspace, saveWorkspace, serializeWorkspace, parseWorkspace, workspacePixelCount, MAX_WORKSPACE_PIXELS } from './storage.js';
 import { createDemo, PALETTES } from './demo.js';
+import { MAX_PALETTES, validatePalette, importPalette, exportPalette } from './palettes.js';
 import { icon } from './icons.js';
 import { buildTileset, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels } from './tiles.js';
 import { makeTilemap, mapLayer, paintTerrain, resolveTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
@@ -14,6 +15,7 @@ const toolList = [ ['pencil','pencil','Pencil','B'], ['eraser','eraser','Eraser'
 let workspace;
 try { workspace = await loadWorkspace() || createDemo(); } catch (error) { workspace = createDemo(); setTimeout(() => toast(`Could not restore saved data: ${error.message}`, true), 300); }
 workspace.tilemaps ||= [];
+workspace.palettes.saved ||= [];
 workspace.session ||= {tabs:[workspace.activeId],activeTab:workspace.activeId,view:'pixel'};
 workspace.settings.pasteNewLayer ??= true;
 workspace.settings.mapGrid ??= true;
@@ -99,7 +101,7 @@ function setView(view) {
   if(view==='tiles'){if(state.tile?.id){openDocument(state.tile.id);return;}if(workspace.tilesets.length){openDocument(workspace.tilesets[0].id);return;}newTileset();return;}
   if(view==='map'){if(currentMap()){openDocument(currentMap().id);return;}newMapDialog();}
 }
-function headerMarkup(){return `<header class="app-header"><a class="brand" href="./" aria-label="Pixfit home"><img src="./favicon.svg" alt="" width="34" height="34"/><span>pixfit<span class="brand-dot">.</span></span><span class="version">STUDIO</span></a><nav class="workspace-nav" aria-label="Editor">${[['pixel','pencil','Pixel editor'],['tiles','tiles','Tileset builder'],['map','grid','Tilemap editor'],['library','folder','Library']].map(([id,glyph,name])=>`<button class="${state.view===id?'active':''}" data-action="${id}" aria-label="${name}" aria-current="${state.view===id?'page':'false'}">${icon(glyph)}<span>${name}</span></button>`).join('')}</nav><div class="header-actions">${state.view==='library'?button('new','plus','New sprite','button dark'):button('export','download','Export','button dark')}${iconButton('settings','settings','Workspace settings')}</div></header>`;}
+function headerMarkup(){return `<header class="app-header"><a class="brand" href="./" aria-label="Pixfit home"><img src="./favicon.svg" alt="" width="34" height="34"/><span>pixfit<span class="brand-dot">.</span></span><span class="version">STUDIO</span></a><div class="header-actions">${button('library','folder','Library',`button quiet ${state.view==='library'?'active':''}`,`aria-current="${state.view==='library'?'page':'false'}"`)}${state.view==='library'?button('new','plus','New sprite','button dark'):button('export','download','Export','button dark')}${iconButton('settings','settings','Workspace settings')}</div></header>`;}
 function footerMarkup(){return `<footer class="app-footer"><span><span class="status-dot"></span>Local-first. Yours forever.</span><span>Everything stays in your browser</span><button data-action="help" class="footer-link">${icon('help')}Shortcuts & help</button></footer>`;}
 function tabsMarkup(){return `<div class="document-tabs" role="tablist" aria-label="Open documents">${workspace.session.tabs.map(id=>allAssets().find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="document-tab ${workspace.session.activeTab===a.id?'active':''}"><button role="tab" aria-selected="${workspace.session.activeTab===a.id}" data-action="open-tab" data-id="${a.id}">${icon(a.kind==='sprite'?'image':a.kind==='tileset'?'tiles':'grid')}<span>${escape(a.name)}</span></button>${iconButton('close-tab','close',`Close ${a.name}`,`data-id="${a.id}"`)}</div>`).join('')}<button class="new-tab" data-action="new-document" title="New document" aria-label="New document">${icon('plus')}</button></div>`;}
 function render() {
@@ -128,10 +130,51 @@ function render() {
   renderLeft(); renderRight(); updateHistory(); updateSaveStatus(); updateCanvas(); bindStage();
 }
 function sectionTitle(title, right = '') { return `<div class="section-title"><h2>${title}</h2>${right}</div>`; }
+
+function paletteChoices(){
+  return [...Object.entries(PALETTES).map(([id,p])=>({id,name:p.name.replace(/ · .*$/,''),colors:p.colors,builtin:true})),{id:'custom',name:'My palette',colors:workspace.palettes.custom},...workspace.palettes.saved];
+}
+function currentPalette(){return paletteChoices().find(p=>p.id===settings().palette)||paletteChoices()[0];}
+function paletteColorRow(color){
+  return `<div class="palette-color-row"><input class="palette-color-picker" type="color" value="${color}" aria-label="Choose palette color"/><input name="palette-color" value="${color}" aria-label="Palette hex color" pattern="#[0-9a-fA-F]{6}" maxlength="7" required spellcheck="false"/>${iconButton('palette-remove-color','trash','Remove color')}</div>`;
+}
+function paletteEditor(create=false,source=null){
+  const selected=currentPalette(),copy=create||selected.builtin;
+  if(copy&&workspace.palettes.saved.length>=MAX_PALETTES)throw new Error('Your workspace holds up to 32 named palettes.');
+  const initial=source||(!create?selected:{name:'Untitled palette',colors:[]});
+  const name=initial.name+(selected.builtin&&!create?' copy':'');
+  showDialog(copy?'Create a palette':'Edit palette','Name your palette and edit its colors. Changes apply when you save.',
+    `${selected.id==='custom'&&!copy?'<p class="field-note">My palette is your original custom collection. Duplicate it to give it a new name.</p>':nameField(name)}<div id="palette-colors">${initial.colors.map(paletteColorRow).join('')}</div>${button('palette-add-color','plus','Add foreground color','button outlined')}<p class="field-note">Up to 128 colors · Hex values use #RRGGBB. Built-in palettes are copied before editing.</p>`,
+    'Save palette',data=>{
+      const value=validatePalette({name:selected.id==='custom'&&!copy?'My palette':data.get('name'),colors:data.getAll('palette-color')});
+      if(copy){const p={id:uid(),...value};workspace.palettes.saved.push(p);settings().palette=p.id;}
+      else if(selected.id==='custom')workspace.palettes.custom=value.colors;
+      else Object.assign(workspace.palettes.saved.find(p=>p.id===selected.id),value);
+      changed();closeDialog();renderLeft();
+    });
+}
+function deletePalette(){
+  const p=currentPalette();if(!workspace.palettes.saved.some(item=>item.id===p.id))return;
+  showDialog('Delete palette?',p.name,'<p class="field-note">This removes the palette from your workspace. Artwork already painted with these colors is preserved.</p>','Delete palette',()=>{
+    workspace.palettes.saved=workspace.palettes.saved.filter(item=>item.id!==p.id);settings().palette='woodland';changed();closeDialog();renderLeft();
+  });
+}
+function pickPalette(){
+  const input=document.createElement('input');input.type='file';input.accept='.json,application/json';
+  input.addEventListener('change',async()=>{
+    try{
+      const file=input.files[0];if(!file)return;
+      if(file.size>100000)throw new Error('Choose a palette JSON file smaller than 100 KB.');
+      if(workspace.palettes.saved.length>=MAX_PALETTES)throw new Error('Your workspace holds up to 32 named palettes.');
+      const palette=importPalette(JSON.parse(await file.text()));workspace.palettes.saved.push(palette);settings().palette=palette.id;changed();renderLeft();toast('Palette imported.');
+    }catch(error){toast(error.message,true);}
+  });input.click();
+}
+
 function renderLeft() {
   if (state.view === 'tiles') { renderTilesLeft(); return; }
   if (state.view === 'map') { renderMapLeft(); return; }
-  const opts = settings(), colors = opts.palette === 'custom' ? workspace.palettes.custom : PALETTES[opts.palette].colors;
+  const opts = settings(), colors = currentPalette().colors;
   $('#left-panel').innerHTML = `
     <section class="panel-section tools-section">${sectionTitle('YOUR TOOLBOX', '<span class="key-hint">B</span>')}
       <div class="tool-grid">${toolList.map(([id,glyph,name,key]) => `<button class="tool-button ${state.tool === id ? 'active' : ''}" data-action="tool" data-tool="${id}" title="${name} (${key})" aria-label="${name} (${key})" aria-pressed="${state.tool === id}">${icon(glyph)}<span>${name}</span><kbd>${key}</kbd></button>`).join('')}</div>
@@ -143,9 +186,10 @@ function renderLeft() {
       <button data-action="dither" class="toggle-row" aria-pressed="${opts.dither}"><span>${icon('dither')}Dithering</span><span class="switch ${opts.dither ? 'on' : ''}"></span></button>
     </section>
     <section class="panel-section symmetry-section">${sectionTitle('SYMMETRY')}<div class="segmented">${button('mirror-x','mirrorX','Horizontal',opts.mirrorX ? 'active' : '', `aria-pressed="${opts.mirrorX}"`)}${button('mirror-y','mirrorY','Vertical',opts.mirrorY ? 'active' : '', `aria-pressed="${opts.mirrorY}"`)}</div></section>
-    <section class="panel-section palette-section">${sectionTitle('COLOR PALETTE',iconButton('add-color','plus','Save current color to custom palette'))}
-      <div class="palette-select-wrap"><select id="palette-select" aria-label="Color palette">${Object.entries(PALETTES).map(([key,p]) => `<option value="${key}" ${opts.palette === key ? 'selected' : ''}>${p.name}</option>`).join('')}<option value="custom" ${opts.palette === 'custom' ? 'selected' : ''}>My palette · ${workspace.palettes.custom.length} colors</option></select></div>
-      <div class="palette-grid">${colors.length ? colors.map(c => `<button class="swatch ${c.toLowerCase() === opts.color.toLowerCase() ? 'active' : ''}" data-action="color" data-color="${c}" style="--swatch:${c}" title="${c}" aria-label="Color ${c}" aria-pressed="${c.toLowerCase() === opts.color.toLowerCase()}"></button>`).join('') : '<p class="empty-palette">Pick a color below and press + to make this palette yours.</p>'}</div>
+    <section class="panel-section palette-section">${sectionTitle('COLOR PALETTE',iconButton('add-color','plus','Add foreground color to palette'))}
+      <div class="palette-select-wrap"><select id="palette-select" aria-label="Color palette">${paletteChoices().map(p=>`<option value="${p.id}" ${opts.palette===p.id?'selected':''}>${escape(p.name)} · ${p.colors.length} colors</option>`).join('')}</select></div>
+      <div class="palette-actions">${iconButton('new-palette','plus','New palette')}${iconButton('edit-palette','pencil','Edit palette')}${iconButton('duplicate-palette','copy','Duplicate palette')}${iconButton('import-palette','upload','Import palette')}${iconButton('export-palette','download','Export palette')}${iconButton('delete-palette','trash','Delete palette',workspace.palettes.saved.some(p=>p.id===opts.palette)?'':'disabled')}</div>
+      <div class="palette-grid">${colors.length ? colors.map(c => `<button class="swatch ${c.toLowerCase() === opts.color.toLowerCase() ? 'active' : ''}" data-action="color" data-color="${c}" style="--swatch:${c}" title="${c}" aria-label="Color ${c}" aria-pressed="${c.toLowerCase() === opts.color.toLowerCase()}"></button>`).join('') : '<p class="empty-palette">Add your foreground color with +, or open Edit palette.</p>'}</div>
       <div class="current-color"><label class="color-well" title="Choose a color"><input id="color-input" type="color" value="${opts.color}" aria-label="Choose foreground color"/></label><div><span>Foreground</span><input id="hex-input" aria-label="Hex color" value="${opts.color.toUpperCase()}" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"/></div>${iconButton('swap-colors','swap','Swap foreground and background (X)')}<span class="background-color" style="background:${opts.secondaryColor}" title="Background color ${opts.secondaryColor}"></span></div>
     </section>
     <section class="panel-section clipboard-section">${sectionTitle('SELECTION & CLIPBOARD')}<div class="clipboard-actions">${button('copy-selection','copy','Copy','button outlined')}${button('paste-selection','layers','Paste','button outlined',state.clipboard?'':'disabled')}</div><label class="checkbox-row"><input id="paste-new-layer" type="checkbox" ${opts.pasteNewLayer?'checked':''}/>Paste into a new layer</label><p class="field-note">Ctrl+C / Ctrl+V · Hold Ctrl to pick a color.</p></section>
@@ -550,9 +594,11 @@ $('#json-file').addEventListener('change',async e=>{
       else{
         if(workspace.sprites.length+imported.sprites.length>100||workspace.tilesets.length+imported.tilesets.length>100||workspace.tilemaps.length+imported.tilemaps.length>100)throw new Error('Merged workspaces can have up to 100 assets of each type.');
         checkCapacity(workspacePixelCount(imported));
+        if(workspace.palettes.saved.length+imported.palettes.saved.length>MAX_PALETTES)throw new Error('Merging would exceed 32 named palettes.');
         const map=new Map();for(const s of imported.sprites){map.set(s.id,uid());s.id=map.get(s.id);const old=s.activeLayerId;for(const l of s.layers){const prev=l.id;l.id=uid();if(prev===old)s.activeLayerId=l.id;}}
         for(const t of imported.tilesets){const old=t.id;t.id=uid();map.set(old,t.id);for(const key of ['terrainA','terrainB','borderTexture'])t.options[key]=map.get(t.options[key])||'';for(const o of Object.values(t.options.overrides||{}))if(o.borderTexture)o.borderTexture=map.get(o.borderTexture)||'';}
         for(const m of imported.tilemaps){m.id=uid();m.tilesetId=map.get(m.tilesetId);const active=m.activeLayerId;for(const l of m.layers){const old=l.id;l.id=uid();if(old===active)m.activeLayerId=l.id;}}
+        workspace.palettes.saved.push(...imported.palettes.saved.map(p=>({...p,id:uid()})));
         workspace.sprites.push(...imported.sprites);workspace.tilesets.push(...imported.tilesets);workspace.tilemaps.push(...imported.tilemaps);workspace.palettes.custom=[...new Set([...workspace.palettes.custom,...imported.palettes.custom])].slice(0,128);
       }
       state.history.clear();state.tabViews.clear();state.tile=null;state.mapId=null;state.selection=null;hydrateSession();changed();await persist();closeDialog();render();if(state.view!=='library')fitCanvas();toast('Your workspace is restored.');
@@ -603,7 +649,20 @@ document.addEventListener('click',async e=>{
       case 'mirror-y':settings().mirrorY=!settings().mirrorY;changed();renderLeft();break;
       case 'color':settings().color=el.dataset.color;changed();renderLeft();break;
       case 'swap-colors':[settings().color,settings().secondaryColor]=[settings().secondaryColor,settings().color];changed();renderLeft();break;
-      case 'add-color':if(workspace.palettes.custom.length>=128)throw new Error('Your custom palette can hold 128 colors.');if(!workspace.palettes.custom.includes(settings().color))workspace.palettes.custom.push(settings().color);settings().palette='custom';changed();renderLeft();toast('Color added to your palette.');break;
+      case 'new-palette':paletteEditor(true);break;
+      case 'edit-palette':paletteEditor();break;
+      case 'duplicate-palette':paletteEditor(true,currentPalette());break;
+      case 'delete-palette':deletePalette();break;
+      case 'import-palette':pickPalette();break;
+      case 'export-palette':download(new Blob([JSON.stringify(exportPalette(currentPalette()),null,2)],{type:'application/json'}),`${safeName(currentPalette().name)}.palette.json`);break;
+      case 'palette-remove-color':el.closest('.palette-color-row').remove();break;
+      case 'palette-add-color':if(document.querySelectorAll('.palette-color-row').length>=128)throw new Error('A palette can hold 128 colors.');$('#palette-colors').insertAdjacentHTML('beforeend',paletteColorRow(settings().color));break;
+      case 'add-color':{
+        const palette=currentPalette();
+        if(palette.builtin){paletteEditor(true,{name:palette.name+' copy',colors:[...palette.colors,...(palette.colors.includes(settings().color)?[]:[settings().color])]});break;}
+        if(palette.colors.length>=128)throw new Error('A palette can hold 128 colors.');
+        if(!palette.colors.includes(settings().color))palette.colors.push(settings().color);changed();renderLeft();toast('Color added to your palette.');break;
+      }
       case 'grid':{const key=state.view==='map'?'mapGrid':'grid';settings()[key]=!settings()[key];el.setAttribute('aria-pressed',settings()[key]);changed();drawOverlay();break;}
       case 'undo':undo();break;
       case 'redo':undo(true);break;
@@ -654,6 +713,8 @@ let opacityEditing=false;
 document.addEventListener('pointerdown',e=>{if(e.target.id==='opacity'){checkpoint();opacityEditing=true;}});
 document.addEventListener('change',e=>{try{
   const el=e.target,id=el.id;
+  if(el.matches('.palette-color-picker'))el.closest('.palette-color-row').querySelector('[name="palette-color"]').value=el.value;
+  if(el.name==='palette-color'&&/^#[0-9a-f]{6}$/i.test(el.value))el.closest('.palette-color-row').querySelector('.palette-color-picker').value=el.value;
   if(id==='palette-select'){settings().palette=el.value;changed();renderLeft();}
   if(id==='color-input'||id==='hex-input'){let color=el.value;if(!color.startsWith('#'))color=`#${color}`;if(!/^#[0-9a-fA-F]{6}$/.test(color)){toast('Enter a six-digit hex color, like #738B51.');el.value=settings().color;return;}settings().color=color.toLowerCase();changed();renderLeft();}
   if(id==='brush-range'){settings().brushSize=Number(el.value);changed();renderLeft();}
@@ -722,7 +783,7 @@ function hydrateSession(){
   if(doc.kind==='tilemap')state.mapId=doc.id;
   state.view=workspace.session.view==='library'?'library':assetView(doc);
 }
-hydrateSession();render();if(state.view!=='library')fitCanvas();
+hydrateSession();state.view='library';render();
 if(!state.saved)persist();
 // Save starter content too, so a backup is available before the first edit.
 changed();

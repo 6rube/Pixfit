@@ -8,6 +8,6 @@
     "dev": "node scripts/serve.mjs",
     "start": "node scripts/serve.mjs",
     "test": "node --test tests/*.test.js",
-    "check": "node --check src/app.js && node --check src/core.js && node --check src/storage.js && node --check src/demo.js && node --check src/tiles.js && node --check src/tilemap.js && node --check src/godot.js"
+    "check": "node --check src/app.js && node --check src/core.js && node --check src/storage.js && node --check src/demo.js && node --check src/tiles.js && node --check src/tilemap.js && node --check src/godot.js && node --check src/palettes.js"
   }
 }

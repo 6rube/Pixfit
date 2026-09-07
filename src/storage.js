@@ -1,6 +1,7 @@
 import { encodePixels, decodePixels, MAX_SIZE } from './core.js';
 import { tileDescriptors } from './tiles.js';
 import { validateMapSize } from './tilemap.js';
+import { savedPalettes } from './palettes.js';
 
 export const MAX_WORKSPACE_PIXELS = 32_000_000;
 export function workspacePixelCount(workspace) {
@@ -86,7 +87,8 @@ export function parseWorkspace(data) {
   settings.palette = ['woodland', 'pastel', 'classic', 'custom'].includes(raw.palette) ? raw.palette : 'woodland';
   settings.pasteNewLayer=raw.pasteNewLayer!==false;
   settings.mapGrid=raw.mapGrid!==false;
-  const palettes = { custom: Array.isArray(data.palettes?.custom) ? data.palettes.custom.filter(validColor).slice(0, 128) : [] };
+  const palettes = { custom: Array.isArray(data.palettes?.custom) ? data.palettes.custom.filter(validColor).slice(0, 128) : [], saved:savedPalettes(data.palettes?.saved) };
+  if(palettes.saved.some(p=>p.id===raw.palette))settings.palette=raw.palette;
   const activeId=sprites.some(s=>s.id===data.activeId)?data.activeId:sprites[0].id;
   const assetIds=new Set([...sprites,...tilesets,...tilemaps].map(a=>a.id)),rawSession=data.session||{};
   const tabs=Array.isArray(rawSession.tabs)?[...new Set(rawSession.tabs.filter(id=>assetIds.has(id)))].slice(0,100):[activeId];
