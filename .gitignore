@@ -2,3 +2,8 @@ node_modules/
 .DS_Store
 test-results/
 .screenshots/
+.env
+.env.local
+.env.*.local
+.config/
+config.json
