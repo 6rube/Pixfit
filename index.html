@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f5f1" />
+    <meta name="description" content="A little space for pixel-perfect worlds. Draw sprites, generate terrain tilesets, and keep everything in your browser." />
+    <title>Pixfit — A little space for pixel worlds</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/workspace.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <dialog id="dialog"></dialog>
+    <input type="file" id="image-file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden />
+    <input type="file" id="json-file" accept=".json,application/json" hidden />
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
