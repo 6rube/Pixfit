@@ -18,7 +18,8 @@ export function paintMap(map,layer,x,y,tile,tool='paint') {
   else layer.cells[y*map.width+x]=value;
 }
 // Brush intent is separate from resolved atlas IDs so neighboring tiles can change.
-// 0 = legacy tile, 1/2 = source texture, 3 = autoterrain, 4 = empty, 5 = corner fringe.
+// 0 = atlas tile, 1/2 = terrain texture, 3 = auto terrain, 4 = empty,
+// 5 = corner fringe, 6 = legacy repeating texture, 7 = selected texture grid tile.
 export function paintTerrain(map,layer,atlas,x,y,brush,tool='paint') {
   if(x<0||y<0||x>=map.width||y>=map.height)return;
   layer.terrain ||= new Uint32Array(map.width*map.height);
@@ -77,19 +78,41 @@ export function paintMapBrush(map,layer,x,y,brush,tool='paint') {
   if(x<0||y<0||x>=map.width||y>=map.height)return;
   layer.terrain ||= new Uint32Array(map.width*map.height);
   layer.sources ||= new Uint32Array(map.width*map.height);
-  const write=i=>{layer.sources[i]=tool==='erase'?0:brush.source;layer.terrain[i]=tool==='erase'?4:brush.kind==='texture'?6:brush.kind==='terrain'?brush.value:0;layer.cells[i]=tool!=='erase'&&brush.kind==='tile'?brush.value+1:0;};
+  const write=i=>{
+    let part=brush;
+    if(brush.kind==='pattern'){
+      const dx=i%map.width-(brush.origin?.x??x),dy=Math.floor(i/map.width)-(brush.origin?.y??y);
+      const px=(dx%brush.width+brush.width)%brush.width,py=(dy%brush.height+brush.height)%brush.height;
+      part=brush.tiles[py*brush.width+px];
+    }
+    layer.sources[i]=tool==='erase'?0:part.source;
+    layer.terrain[i]=tool==='erase'?4:part.kind==='texture-tile'?7:part.kind==='texture'?6:part.kind==='terrain'?part.value:0;
+    layer.cells[i]=tool!=='erase'&&['tile','texture-tile'].includes(part.kind)?part.value+1:0;
+  };
   if(tool==='fill'){
     const keys=new Map(),regions=new Uint32Array(layer.cells.length);
     for(let i=0;i<regions.length;i++){
       const type=layer.terrain[i],empty=type===4||type===5||(!type&&!layer.cells[i]);
-      const key=empty?'empty':`${layer.sources[i]}:${type}:${type?0:layer.cells[i]}`;
+      const key=empty?'empty':`${layer.sources[i]}:${type}:${!type||type===7?layer.cells[i]:0}`;
       if(!keys.has(key))keys.set(key,keys.size+1);regions[i]=keys.get(key);
     }
     floodFill(regions,map.width,map.height,x,y,0);
     for(let i=0;i<regions.length;i++)if(!regions[i])write(i);
+  }else if(brush.kind==='pattern'&&tool==='paint'){
+    for(let py=0;py<brush.height&&y+py<map.height;py++)for(let px=0;px<brush.width&&x+px<map.width;px++)write((y+py)*map.width+x+px);
   }else write(y*map.width+x);
 }
-// Large library textures are independent pixel-positioned stamps, not repeated cells.
+// Texture sheets use the map grid. Partial edge cells are padded with transparency.
+export function textureTiles(sprite,cellWidth,cellHeight) {
+  const columns=Math.ceil(sprite.width/cellWidth),rows=Math.ceil(sprite.height/cellHeight);
+  return Array.from({length:columns*rows},(_,id)=>({id,x:id%columns*cellWidth,y:Math.floor(id/columns)*cellHeight,width:cellWidth,height:cellHeight}));
+}
+export function textureTile(sprite,cellWidth,cellHeight,id,pixels=composite(sprite)) {
+  const columns=Math.ceil(sprite.width/cellWidth),tile=Number.isInteger(id)&&id>=0&&id<columns*Math.ceil(sprite.height/cellHeight)?{x:id%columns*cellWidth,y:Math.floor(id/columns)*cellHeight}:null,result=new Uint32Array(cellWidth*cellHeight);
+  if(tile)for(let y=0;y<cellHeight&&tile.y+y<sprite.height;y++)for(let x=0;x<cellWidth&&tile.x+x<sprite.width;x++)result[y*cellWidth+x]=pixels[(tile.y+y)*sprite.width+tile.x+x];
+  return {width:cellWidth,height:cellHeight,pixels:result};
+}
+// Retained for maps saved with the earlier free texture stamp workflow.
 export function placeMapDecal(map,layer,x,y,source) {
   layer.decals ||= [];
   const decal={source,x,y};
@@ -112,6 +135,16 @@ export function renderTilemap(map,atlas,time=0) {
     for(let y=0;y<map.height;y++)for(let x=0;x<map.width;x++) {
       const cell=y*map.width+x,sourceIndex=layer.sources?.[cell]||0;
       const atlas=mapSource(map,sourceIndex,assets),material=layer.terrain?.[cell];
+      if(material===7&&atlas?.kind==='sprite'){
+        const key=`${atlas.id}:texture:${layer.cells[cell]}`;
+        if(!textureCache.has(atlas.id))textureCache.set(atlas.id,{...atlas,pixels:composite(atlas)});
+        if(!cache.has(key))cache.set(key,textureTile(atlas,map.cellWidth,map.cellHeight,layer.cells[cell]-1,textureCache.get(atlas.id).pixels));
+        const tile=cache.get(key);
+        for(let py=0;py<map.cellHeight;py++)for(let px=0;px<map.cellWidth;px++){
+          const i=(y*map.cellHeight+py)*width+x*map.cellWidth+px;pixels[i]=blendPixel(pixels[i],tile.pixels[py*map.cellWidth+px],layer.opacity/100);
+        }
+        continue;
+      }
       let source=(material===1||material===2)&&!layer.cells[cell]&&!sourceIndex?map.textures?.[material-1]:null;
       const sprite=material===6?atlas:!source&&(material===1||material===2)&&!layer.cells[cell]?assets.sprites.find(s=>s.id===atlas?.options?.[material===1?'terrainA':'terrainB']):null;
       if(sprite){if(!textureCache.has(sprite.id))textureCache.set(sprite.id,{...sprite,pixels:composite(sprite)});source=textureCache.get(sprite.id);}

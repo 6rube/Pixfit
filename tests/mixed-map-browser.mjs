@@ -26,24 +26,24 @@ try{
   await page.click('[data-action="map-tile"][data-index="115"]');await paint(0,0);
   await page.selectOption('#map-tileset',b.id);assert.equal(await page.locator('[data-map-brush]').count(),16);
   await page.click('[data-action="map-tile"][data-index="100"]');await paint(1,0);
-  await page.selectOption('#map-tileset','textures');assert.equal(await page.locator('[data-map-brush]').count(),w.sprites.length);
-  await page.click(`[data-action="map-tile"][data-index="${w.sprites[0].id}"]`);await paint(2,0);
-  let m=(await saved()).tilemaps[0];assert.equal(m.cellWidth,16);assert.deepEqual(Array.from(m.layers[0].cells.slice(0,3)),[16,1,0]);assert.deepEqual(Array.from(m.layers[0].sources.slice(0,3)),[0,1,2]);
+  await page.selectOption('#map-tileset','textures');assert.equal(await page.locator('[data-map-brush]').count(),1);
+  await page.selectOption('#map-texture',w.sprites[0].id);await page.click('[data-action="texture-tile"][data-index="0"]');await paint(2,0);
+  let m=(await saved()).tilemaps[0];assert.equal(m.cellWidth,16);assert.deepEqual(Array.from(m.layers[0].cells.slice(0,3)),[16,1,1]);assert.deepEqual(Array.from(m.layers[0].sources.slice(0,3)),[0,1,2]);
   await click('undo');m=(await saved()).tilemaps[0];assert.equal(m.layers[0].terrain[2],0);
-  await click('redo');m=(await saved()).tilemaps[0];assert.equal(m.layers[0].terrain[2],6);
+  await click('redo');m=(await saved()).tilemaps[0];assert.equal(m.layers[0].terrain[2],7);
   await page.click('[data-action="map-tool"][data-tool="picker"]');await paint(1,0);assert.equal(await page.locator('#map-tileset').inputValue(),b.id);
   assert.equal(await page.locator('[data-action="map-tile"][aria-pressed="true"]').getAttribute('data-index'),'100');
   await paint(1,0,'right');m=(await saved()).tilemaps[0];assert.equal(m.layers[0].cells[1],0);await click('undo');
-  await page.selectOption('#map-tileset','textures');await page.click(`[data-action="map-tile"][data-index="${w.sprites[0].id}"]`);
+  await page.selectOption('#map-tileset','textures');await page.selectOption('#map-texture',w.sprites[0].id);await page.click('[data-action="texture-tile"][data-index="0"]');
   await page.click('[data-action="map-tool"][data-tool="rect"]');
   const box=await page.locator('#art-canvas').boundingBox();await page.mouse.move(box.x+box.width/8,box.y+box.height*5/8);await page.mouse.down();await page.mouse.move(box.x+box.width*3/8,box.y+box.height*7/8,{steps:4});await page.mouse.up();
-  m=(await saved()).tilemaps[0];for(const i of [8,9,12,13])assert.equal(m.layers[0].terrain[i],6);
+  m=(await saved()).tilemaps[0];for(const i of [8,9,12,13])assert.equal(m.layers[0].terrain[i],7);
   await page.reload();await page.locator('.library-open').filter({hasText:'Mixed world'}).click();assert.deepEqual((await saved()).tilemaps[0].layers,m.layers);
   await click('export');await page.selectOption('[name="format"]','map');
   const downloadPromise=page.waitForEvent('download');await page.click('#dialog button[type="submit"]');const download=await downloadPromise;
   const zip=await readFile(await download.path());const files=new Map();
   for(let offset=0;zip.readUInt32LE(offset)===0x04034b50;){const size=zip.readUInt32LE(offset+18),length=zip.readUInt16LE(offset+26),extra=zip.readUInt16LE(offset+28),start=offset+30+length+extra;files.set(zip.subarray(offset+30,offset+30+length).toString(),zip.subarray(start,start+size));offset=start+size;}
-  const json=JSON.parse(files.get('map.json'));assert.equal(json.version,3);assert.equal(json.assets.length,3);assert.equal(json.layers[0].sources[2],2);for(const asset of json.assets)assert.ok(files.has(asset.image));
+  const json=JSON.parse(files.get('map.json'));assert.equal(json.version,4);assert.equal(json.assets.length,3);assert.equal(json.layers[0].sources[2],2);for(const asset of json.assets)assert.ok(files.has(asset.image));
   await page.keyboard.press('Escape');await page.selectOption('#map-tileset',b.id);await page.screenshot({path:'.screenshots/mixed-map.png',fullPage:true});
   assert.deepEqual(errors,[]);console.log('Mixed map browser checks passed: imported tiles, textures, fixed grid, undo/redo, picker, erase, rectangle, reload, and complete source export.');
 }finally{await browser.close();}

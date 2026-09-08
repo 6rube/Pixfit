@@ -18,12 +18,30 @@ The main tools are:
     - Copy Pasting
     - Square and Round Select
     - Simple Dithering
-- Tilesetgenerator (Generates Combined Tilesets)
-    - Tilesets with texture blending
-    - Add Borders to the texture blend
+- Auto terrain generator
+    - Generate corner or blob transitions between terrain textures
+    - Add borders, slopes, tile overrides, and animations
+- Tileset collections
+    - Combine multiple auto terrains into one Godot 4 TileSet resource
 - Tilemapeditor
-    - Auto tileset paint
-    - Place single textures
+    - Mix multiple auto terrains and texture tiles on layers
+    - Select texture tiles using the map grid; save rectangular patterns
+    - Stamp patterns or repeat them with Fill and Rectangle
+    - Export the complete map as one PNG image
+
+## Terrains, tilesets, and patterns
+
+Create **auto terrains** from your terrain textures first. In the Library, **New tileset** collects any compatible auto terrains into a reusable collection. Its **Godot 4** export contains one `tileset.tres`, all selected atlases, animation textures, and tile mappings. Terrains need matching tile dimensions and projection. Material textures share terrain identities within each matching mode; generate transitions for every material pair you want to connect. Corner and blob modes use separate terrain sets, following [Godot's terrain set model](https://docs.godotengine.org/en/stable/tutorials/2d/using_tilesets.html#creating-terrain-sets-autotiling).
+
+In a tilemap, choose a tileset collection or use all library terrains. Choose **Texture tiles & patterns**, then a texture sheet. The map's cell dimensions define the sheet grid. Click one tile, or **Shift-click** a second tile to select a rectangle. **Save selected pattern** keeps that selection in the map. Paint stamps the block; Fill and Rectangle repeat it from the starting cell. Edge tiles retain their original pixels and use transparent padding. New maps support custom grid dimensions.
+
+PNG export flattens all visible map layers into one image. The map ZIP also includes source images, selected tile IDs, and saved patterns. Workspace backups preserve collections and patterns; earlier maps retain their previous texture rendering and placements. Isometric terrain peering still requires setup in Godot.
+
+### Border textures with transparency
+
+For a 32×32 border sprite with transparent padding, choose **Transition texture**, select the sprite, then apply **Transparent strip · original pixels**. This keeps its original thickness and spacing instead of compressing all 32 rows into the border width. The source's top rows face the outer terrain; use **Reverse inner / outer side** to swap that direction.
+
+Under **Placement, repeat & padding**, position the strip inside, outside, or centered on the edge; adjust its offset, pixel scale, repeat length, phase, and rotation. Leave **Trim fully transparent rows** off for intentional half-transparent padding. Enable it with **Fit image to border width** when only the visible artwork should fill a narrow band. Transparency reveals the underlying terrain. The same controls are available in the tile inspector for individual overrides, and settings survive workspace backups. Existing terrains keep their previous fitted-border behavior.
 
 ## Run locally
 
@@ -50,9 +68,13 @@ An optional real-browser check uses an installed Chrome:
 npm install --no-save --package-lock=false playwright
 # Start npm start in a separate terminal, then:
 node tests/browser.mjs
+node tests/patterns-browser.mjs
+node tests/border-textures-browser.mjs
 ```
 
 The browser check exercises editing, clipboard destinations, Ctrl picking, tabs, the full-page library, map painting/fill/layers, tile overrides, slopes, animation configuration, reload persistence, full backup restore, Godot downloads, PNG import/export, 512 pixel canvases, and narrow layouts. Screenshots and test exports are written to the ignored `.screenshots/` directory.
+
+The patterns browser check covers collections, combined Godot downloads, mixed terrain painting, texture grid selection, saved patterns, rectangle repetition, undo/redo, persistence, and PNG export. `tests/godot-collection-validation.gd` validates an exported collection in Godot after its textures have been imported.
 
 ## Source
 

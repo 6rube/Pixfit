@@ -3,9 +3,9 @@ import { loadWorkspace, saveWorkspace, serializeWorkspace, parseWorkspace, works
 import { createDemo, PALETTES } from './demo.js';
 import { MAX_PALETTES, validatePalette, importPalette, exportPalette } from './palettes.js';
 import { icon } from './icons.js';
-import { buildTileset, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels, transformSelection, blendPixel } from './tiles.js';
-import { makeTilemap, mapLayer, paintMapBrush, placeMapDecal, eraseMapDecal, resolveMapTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
-import { godotPackage, zipFiles } from './godot.js';
+import { buildTileset, borderTextureImage, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels, transformSelection, blendPixel } from './tiles.js';
+import { makeTilemap, mapLayer, paintMapBrush, textureTiles, textureTile, eraseMapDecal, resolveMapTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
+import { godotCollectionPackage, zipFiles } from './godot.js';
 
 const $ = (selector) => document.querySelector(selector);
 const escape = (value) => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -23,6 +23,7 @@ systemTheme.addEventListener('change',applyTheme);
 applyTheme();
 try { workspace = await loadWorkspace() || createDemo(); } catch (error) { workspace = createDemo(); setTimeout(() => toast(`Could not restore saved data: ${error.message}`, true), 300); }
 workspace.tilemaps ||= [];
+workspace.collections ||= [];
 workspace.palettes.saved ||= [];
 workspace.session ||= {tabs:[workspace.activeId],activeTab:workspace.activeId,view:'pixel'};
 workspace.settings.pasteNewLayer ??= true;
@@ -43,7 +44,7 @@ function openDocument(id) {
   saveTabView();state.view=assetView(doc);state.selection=null;state.cursor=null;
   if(doc.kind==='sprite')workspace.activeId=id;
   if(doc.kind==='tileset'){state.tile=doc;settings().tile=structuredClone(doc.options);state.selectedTile=0;}
-  if(doc.kind==='tilemap'){state.mapId=id;state.mapSourceId=doc.tilesetId||'textures';state.mapTile=3;}
+  if(doc.kind==='tilemap'){state.mapId=id;state.mapSourceId=doc.tilesetId||'textures';state.mapTile=3;state.textureSelection=null;state.mapCollectionId='';}
   rememberTab(doc);closeDialog();changed();render();
   const view=state.tabViews.get(id);if(view){state.zoom=view.zoom;state.pan=view.pan;state.selection=view.selection;positionCanvas();}else fitCanvas();
 }
@@ -90,7 +91,7 @@ function persist() {
   clearTimeout(state.saveTimer);
   const revision = state.revision;
   // Snapshot synchronously so queued writes always preserve their order.
-  const snapshot = { ...workspace, session:structuredClone(workspace.session), settings: structuredClone(workspace.settings), palettes: structuredClone(workspace.palettes), sprites: workspace.sprites.map(cloneSprite), tilesets: workspace.tilesets.map(t => structuredClone(t)),tilemaps:workspace.tilemaps.map(m=>structuredClone(m)) };
+  const snapshot = { ...workspace, session:structuredClone(workspace.session), settings: structuredClone(workspace.settings), palettes: structuredClone(workspace.palettes), sprites: workspace.sprites.map(cloneSprite), tilesets: workspace.tilesets.map(t => structuredClone(t)),collections:structuredClone(workspace.collections),tilemaps:workspace.tilemaps.map(m=>structuredClone(m)) };
   state.saveQueue = state.saveQueue.catch(() => {}).then(async () => {
     try { state.storage = await saveWorkspace(snapshot); if (revision === state.revision) state.saved = true; updateSaveStatus(); }
     catch { state.saved = false; updateSaveStatus(true); toast('Browser storage is full or unavailable. Export a JSON backup to keep your work.', true); }
@@ -117,20 +118,20 @@ function render() {
   const s = activeDocument(), tiles = state.view === 'tiles',maps=state.view==='map';
   $('#app').innerHTML = `
     ${headerMarkup()}
-    <div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<button data-action="rename">${escape(s.name)}${icon('pencil')}</button><span class="file-badge">${tiles ? 'TILESET' :maps?'TILEMAP': 'SPRITE'}</span></div><div class="workspace-bar-actions"><span id="save-status"></span><span class="divider"></span>${button('new-document','plus','New document','text-button')}</div></div>
+    <div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<button data-action="rename">${escape(s.name)}${icon('pencil')}</button><span class="file-badge">${tiles ? 'AUTO TERRAIN' :maps?'TILEMAP': 'SPRITE'}</span></div><div class="workspace-bar-actions"><span id="save-status"></span><span class="divider"></span>${button('new-document','plus','New document','text-button')}</div></div>
     ${tabsMarkup()}
     <div class="editor-layout">
       <aside class="left-panel" id="left-panel" aria-label="Editing tools"></aside>
       <main class="editor-main">
         <div class="canvas-toolbar"><div class="document-title">${icon(tiles ? 'tiles' :maps?'grid': 'image')}<span>${escape(s.name)}</span><span class="dimensions" id="canvas-dimensions"></span></div><div class="canvas-actions">${iconButton('undo','undo','Undo (Ctrl+Z)')}${iconButton('redo','redo','Redo (Ctrl+Shift+Z)')}<span class="divider"></span>${tiles?button('tiles-to-map','grid','Use in map','text-button'):iconButton(maps?'resize-map':'resize','resize','Resize canvas')}${iconButton('grid','grid','Toggle grid (Ctrl+\')', `aria-pressed="${maps?settings().mapGrid:settings().grid}"`)}<button class="icon-button mobile-inspector" data-action="inspector" title="Layers and preview" aria-label="Layers and preview" aria-expanded="${state.inspector}">${icon('layers')}</button></div></div>
-        <div class="stage" id="stage" tabindex="0" aria-label="${tiles ? 'Generated tileset preview' : 'Pixel editing canvas. Use the tools or keyboard shortcuts to edit.'}">
+        <div class="stage" id="stage" tabindex="0" aria-label="${tiles ? 'Generated auto terrain preview' : 'Pixel editing canvas. Use the tools or keyboard shortcuts to edit.'}">
           <div class="stage-caption"><span class="tiny-dot"></span>${tiles ? 'A whole world, one tile at a time.' : 'A little space for pixel-perfect worlds.'}</div>
           <div id="canvas-position"><canvas id="art-canvas"></canvas><canvas id="selection-canvas"></canvas></div><canvas id="repeat-preview" aria-label="Repeating pattern preview"></canvas>
           <div id="brush-cursor"></div>
           <div class="stage-bottom"><span>${tiles ? 'AUTOMATIC COMPOSITING' : 'MADE OF LITTLE THINGS'}</span><span>${icon('sun')}Make something you love.</span></div>
           <div class="zoom-controls">${iconButton('zoom-out','minus','Zoom out')}<button id="zoom-label" data-action="zoom-reset" title="Reset zoom to 100%">600%</button>${iconButton('zoom-in','plus','Zoom in')}<span class="divider"></span>${iconButton('fit','fit','Fit canvas (F)')}</div>
         </div>
-        <div class="canvas-footer"><span id="pointer-status">${icon(tiles ? 'tiles' : 'pencil')}<span>${tiles ? 'Generated tileset' : 'Pencil tool'}</span></span><span id="selection-status"></span><span class="canvas-tip">${tiles ? 'Click a tile to inspect · Scroll to zoom' : 'Space + drag to pan · Scroll to zoom'}</span></div>
+        <div class="canvas-footer"><span id="pointer-status">${icon(tiles ? 'tiles' : 'pencil')}<span>${tiles ? 'Generated auto terrain' : 'Pencil tool'}</span></span><span id="selection-status"></span><span class="canvas-tip">${tiles ? 'Click a tile to inspect · Scroll to zoom' : 'Space + drag to pan · Scroll to zoom'}</span></div>
       </main>
       <aside class="right-panel ${state.inspector ? 'inspector-open' : ''}" id="right-panel" aria-label="Preview and layers"></aside>
     </div>
@@ -219,24 +220,59 @@ function renderRight() {
     <section class="panel-section assets-section">${sectionTitle('IN YOUR LIBRARY', '<button class="text-link" data-action="library">View all</button>')}<div class="asset-strip">${workspace.sprites.filter(a => a.id !== s.id).slice(0,3).map(a => `<button class="mini-asset" data-action="open-sprite" data-id="${a.id}" title="Open ${escape(a.name)}"><span class="checker"><canvas data-asset-preview="${a.id}"></canvas></span><span>${escape(a.name)}</span></button>`).join('')}</div></section>`;
   drawThumbnails();
 }
+function rememberBorderDetails(){
+  state.borderDetailsOpen||={};
+  document.querySelectorAll('[data-border-details]').forEach(el=>state.borderDetailsOpen[el.dataset.borderDetails]=el.open);
+}
+function borderTextureControls(opts,selected=false){
+  const source=workspace.sprites.find(s=>s.id===opts.borderTexture),image=borderTextureImage(source,opts),native=opts.borderMapping==='native';
+  const attr=key=>`data-border-option="${key}" data-border-selected="${selected}"`;
+  const select=(key,label,items,value)=>`<label class="field-label">${label}<select ${attr(key)}>${items.map(([id,name])=>`<option value="${id}" ${String(value)===String(id)?'selected':''}>${name}</option>`).join('')}</select></label>`;
+  const number=(key,label,value,min,max)=>`<label class="field-label">${label}<input type="number" ${attr(key)} min="${min}" max="${max}" value="${value||0}"/></label>`;
+  return `<div class="border-texture-controls">${button('border-strip-preset','sparkles','Transparent strip · original pixels','button outlined full-width',`data-selected="${selected}" ${source?'':'disabled'}`)}
+  ${image?`<div class="border-strip-preview checker"><canvas data-border-preview="${selected?'selected':'global'}" aria-label="Border strip from outer side to inner side"></canvas></div><p class="field-note">${image.width} × ${image.height} px strip · ${native?image.height*(opts.borderScale||1):opts.border} px across the edge. Preview rows run from outer side (top) to inner side (bottom).</p>`:'<p class="field-note">Choose your border sprite first.</p>'}
+  ${select('borderMapping','Texture sizing',[['fit','Fit image to border width'],['native','Original pixels · keep padding']],opts.borderMapping||'fit')}
+  <label class="checkbox-row"><input type="checkbox" ${attr('borderReverse')} ${opts.borderReverse?'checked':''}/>Reverse inner / outer side</label>
+  <details class="border-texture-details" data-border-details="${selected?'selected':'global'}" ${state.borderDetailsOpen?.[selected?'selected':'global']?'open':''}><summary>Placement, repeat & padding</summary>
+  ${select('borderAlign','Place strip',[['center','Centered on terrain edge'],['inner','Inside the inner terrain'],['outer','Outside the inner terrain']],opts.borderAlign||'center')}
+  ${number('borderOffset','Offset across edge (px)',opts.borderOffset,-64,64)}<p class="field-note">Positive offset moves the strip inward without moving the terrain edge.</p>
+  ${select('borderScale','Pixel scale',[['0.5','½×'],['1','1×'],['2','2×'],['4','4×']],opts.borderScale||1)}
+  <p class="field-note">Scales the repeat length and, in Original pixels mode, the strip thickness.</p>
+  ${number('borderRepeat','Repeat length (px · 0 = automatic)',opts.borderRepeat,0,512)}
+  ${number('borderPhase','Slide along edge (px)',opts.borderPhase,-512,512)}
+  ${select('borderRotation','Rotate source strip',[[0,'0° · horizontal strip'],[90,'90°'],[180,'180°'],[270,'270°']],opts.borderRotation||0)}
+  <label class="checkbox-row"><input type="checkbox" ${attr('borderTrim')} ${opts.borderTrim?'checked':''}/>Trim fully transparent rows</label>
+  <p class="field-note">Keep padding for a half-transparent strip. Trim it when you want only the visible artwork fitted to the border. Transparent pixels reveal the terrain underneath.</p></details></div>`;
+}
+function drawBorderTexturePreviews(){
+  document.querySelectorAll('[data-border-preview]').forEach(canvas=>{
+    const override=canvas.dataset.borderPreview==='selected'?settings().tile.overrides?.[state.selectedTile]||{}:{};
+    const opts={...settings().tile,...override,borderTexture:override.borderTexture||settings().tile.borderTexture};
+    let image=borderTextureImage(workspace.sprites.find(s=>s.id===opts.borderTexture),opts);if(!image)return;
+    if(opts.borderReverse)image=transformImage(image,0,false,true);
+    paintCanvas(canvas,image.pixels,image.width,image.height);
+  });
+}
 function renderTilesLeft() {
+  rememberBorderDetails();
   const opts = settings().tile;
   const source = (key, title, letter) => `<label class="source-label"><span><i>${letter}</i>${title}</span><select id="${key}" aria-label="${title}">${key === 'terrainB' ? '<option value="">Transparent</option>' : ''}${workspace.sprites.map(s => `<option value="${s.id}" ${s.id === opts[key] ? 'selected' : ''}>${escape(s.name)} (${s.width} × ${s.height})</option>`).join('')}</select></label>`;
   $('#left-panel').innerHTML = `
     <section class="panel-section">${sectionTitle('TERRAIN SOURCES','<span class="key-hint">01</span>')}<p class="section-copy">Mix two textures. We’ll take care of the connections.</p>${source('terrainA','Inner terrain','A')}${source('terrainB','Outer terrain','B')}<div class="terrain-samples"><div class="checker"><canvas id="terrain-a-preview"></canvas><span>Inside</span></div>${icon('swap')}<div class="checker"><canvas id="terrain-b-preview"></canvas><span>${opts.terrainB ? 'Outside' : 'Transparent'}</span></div></div>${button('import-terrain','upload','Import texture','text-button')}</section>
     <section class="panel-section">${sectionTitle('TILE CONFIGURATION','<span class="key-hint">02</span>')}<label class="field-label">Tile size<select id="tile-size">${[8,16,32,64].map(n=>`<option value="${n}" ${opts.size===n?'selected':''}>${n} × ${n} pixels</option>`).join('')}</select></label><label class="field-label">Compositing mode<select id="tile-mode"><option value="wang" ${opts.mode==='wang'?'selected':''}>16 tiles · Corner terrain</option><option value="blob" ${opts.mode==='blob'?'selected':''}>47 tiles · Blob autotile</option></select></label><label class="field-label">Atlas columns<select id="tile-columns">${[4,8,16].map(n=>`<option value="${n}" ${opts.columns===n?'selected':''}>${n} columns</option>`).join('')}</select></label></section>
-    <section class="panel-section">${sectionTitle('TRANSITION BORDER','<span class="key-hint">03</span>')}<label class="field-label">Border type<select id="tile-border-type">${['none','dither','texture'].map(type=>`<option value="${type}" ${(opts.borderType||'dither')===type?'selected':''}>${{none:'Hard edge',dither:'Dithered blend',texture:'Transition texture'}[type]}</option>`).join('')}</select></label>${(opts.borderType==='texture')?`<label class="field-label">Transition texture<select id="tile-border-texture"><option value="">Choose a sprite…</option>${spriteOptions(opts.borderTexture)}</select></label>`:''}<label class="range-row"><span>Border width</span><input id="tile-border" type="range" min="0" max="${opts.size}" value="${opts.border}"/><output>${opts.border} px</output></label><label class="field-label">Cutoff / inset (pixels)<input id="tile-cutoff" type="number" min="-${opts.size}" max="${opts.size}" value="${opts.cutoff||0}"/></label><p class="field-note">Positive cutoff shrinks the inner terrain. Negative values expand it.</p></section>
+    <section class="panel-section">${sectionTitle('TRANSITION BORDER','<span class="key-hint">03</span>')}<label class="field-label">Border type<select id="tile-border-type">${['none','dither','texture'].map(type=>`<option value="${type}" ${(opts.borderType||'dither')===type?'selected':''}>${{none:'Hard edge',dither:'Dithered blend',texture:'Transition texture'}[type]}</option>`).join('')}</select></label>${(opts.borderType==='texture')?`<label class="field-label">Transition texture<select id="tile-border-texture"><option value="">Choose a sprite…</option>${spriteOptions(opts.borderTexture)}</select></label>${borderTextureControls(opts)}`:''}<label class="range-row"><span>Border width</span><input id="tile-border" ${opts.borderType==='texture'&&opts.borderMapping==='native'?'disabled':''} type="range" min="0" max="${opts.size}" value="${opts.border}"/><output>${opts.borderType==='texture'&&opts.borderMapping==='native'?'native':opts.border+' px'}</output></label><label class="field-label">Cutoff / inset (pixels)<input id="tile-cutoff" type="number" min="-${opts.size}" max="${opts.size}" value="${opts.cutoff||0}"/></label><p class="field-note">Positive cutoff shrinks the inner terrain. Negative values expand it.</p></section>
     <section class="panel-section">${sectionTitle('SHAPES & PROJECTION')}<label class="checkbox-row"><input id="tile-slopes1" type="checkbox" ${opts.slopes1?'checked':''}/>Generate 1 × 1 slopes</label><label class="checkbox-row"><input id="tile-slopes2" type="checkbox" ${opts.slopes2?'checked':''}/>Generate 1 × 2 slopes</label><p class="field-note">Four directions per slope size. Rotate a tall slope to make it wide.</p><button data-action="tile-iso" class="toggle-row" aria-pressed="${opts.isometric}"><span>${icon('iso')}Isometric projection</span><span class="switch ${opts.isometric?'on':''}"></span></button><button data-action="tile-gap" class="toggle-row" aria-pressed="${opts.gap}"><span>${icon('grid')}1 px tile spacing</span><span class="switch ${opts.gap?'on':''}"></span></button></section>
-    <div class="left-bottom">${button('generate','sparkles','Generate tileset','button accent full-width')}${button('import-atlas','upload','Import existing tileset','text-button atlas-import')}<p>Made from your pixels. Connected for you.</p></div>`;
-  drawTerrainPreviews();
+    <div class="left-bottom">${button('generate','sparkles','Generate auto terrain','button accent full-width')}${button('import-atlas','upload','Import tile atlas','text-button atlas-import')}<p>Made from your pixels. Connected for you.</p></div>`;
+  drawTerrainPreviews();drawBorderTexturePreviews();
 }
 function renderTilesRight() {
+  rememberBorderDetails();
   const t = state.tile,tile=tileDescriptors(t)[state.selectedTile],override=settings().tile.overrides?.[state.selectedTile]||{},animation=t.animations?.[state.selectedTile];
   $('#right-panel').innerHTML = `<section class="panel-section preview-section">${sectionTitle('TILE INSPECTOR','<span class="live-badge">LIVE</span>')}<div class="navigator checker tile-inspector"><canvas id="tile-preview"></canvas></div><div class="preview-meta"><span id="tile-name">Tile ${state.selectedTile+1}</span><span>${tile.width} × ${tile.height} px</span></div><div class="tile-stepper">${iconButton('previous-tile','chevron','Previous tile') }<span>${tile.kind==='terrain'?'Terrain tile':tile.kind.replace('slope-','')+' slope'}</span>${iconButton('next-tile','chevron','Next tile')}</div></section>
-    <section class="panel-section">${sectionTitle('THIS TILE',button('reset-tile','undo','Reset','text-button',t.imported?'disabled':''))}<div class="tile-transforms">${button('rotate-tile','redo',`${override.rotation||0}°`,'button outlined')}${button('flip-tile-x','mirrorX','Flip X',`button outlined ${override.flipX?'active':''}`)}${button('flip-tile-y','mirrorY','Flip Y',`button outlined ${override.flipY?'active':''}`)}</div>${t.imported?'<p class="field-note">Transforms edit the imported pixels. To generate texture borders, choose terrain sources and press Generate.</p>':`<label class="field-label">Border override<select id="selected-border-type">${[['inherit','Use tileset border'],['none','Hard edge'],['dither','Dithered blend'],['texture','Transition texture']].map(([value,name])=>`<option value="${value}" ${(override.borderType||'inherit')===value?'selected':''}>${name}</option>`).join('')}</select></label>${override.borderType==='texture'?`<label class="field-label">Texture<select id="selected-border-texture"><option value="">Use tileset texture</option>${spriteOptions(override.borderTexture)}</select></label>`:''}<div class="compact-fields"><label class="field-label">Width (px)<input id="selected-border" type="number" min="0" max="${settings().tile.size}" value="${override.border??settings().tile.border}"/></label><label class="field-label">Cutoff (px)<input id="selected-cutoff" type="number" min="-${settings().tile.size}" max="${settings().tile.size}" value="${override.cutoff??settings().tile.cutoff??0}"/></label></div>`}</section>
+    <section class="panel-section">${sectionTitle('THIS TILE',button('reset-tile','undo','Reset','text-button',t.imported?'disabled':''))}<div class="tile-transforms">${button('rotate-tile','redo',`${override.rotation||0}°`,'button outlined')}${button('flip-tile-x','mirrorX','Flip X',`button outlined ${override.flipX?'active':''}`)}${button('flip-tile-y','mirrorY','Flip Y',`button outlined ${override.flipY?'active':''}`)}</div>${t.imported?'<p class="field-note">Transforms edit the imported pixels. To generate texture borders, choose terrain sources and press Generate.</p>':`<label class="field-label">Border override<select id="selected-border-type">${[['inherit','Use terrain border'],['none','Hard edge'],['dither','Dithered blend'],['texture','Transition texture']].map(([value,name])=>`<option value="${value}" ${(override.borderType||'inherit')===value?'selected':''}>${name}</option>`).join('')}</select></label>${(override.borderType==='texture'||((!override.borderType||override.borderType==='inherit')&&settings().tile.borderType==='texture'))?`<label class="field-label">Texture<select id="selected-border-texture"><option value="">Use terrain texture</option>${spriteOptions(override.borderTexture)}</select></label>${borderTextureControls({...settings().tile,...override,borderTexture:override.borderTexture||settings().tile.borderTexture},true)}`:''}<div class="compact-fields"><label class="field-label">Width (px)<input id="selected-border" ${(override.borderMapping||settings().tile.borderMapping)==='native'&&(override.borderType==='texture'||((!override.borderType||override.borderType==='inherit')&&settings().tile.borderType==='texture'))?'disabled':''} type="number" min="0" max="${settings().tile.size}" value="${override.border??settings().tile.border}"/></label><label class="field-label">Cutoff (px)<input id="selected-cutoff" type="number" min="-${settings().tile.size}" max="${settings().tile.size}" value="${override.cutoff??settings().tile.cutoff??0}"/></label></div>`}</section>
     <section class="panel-section">${sectionTitle('ANIMATED TILE',button('play-animation',state.animationPlaying?'minus':'arrow',state.animationPlaying?'Pause':'Play','text-button'))}<label class="field-label">Frame tiles (in order)<input id="animation-frames" type="text" value="${animation?animation.frames.map(n=>n+1).join(', '):''}" placeholder="e.g. 1, 2, 3, 2"/></label><label class="field-label">Frames per second<input id="animation-fps" type="number" min="1" max="60" value="${animation?.fps||8}"/></label><div class="clipboard-actions">${button('save-animation','check','Apply','button outlined')}${button('clear-animation','trash','Clear','button outlined',animation?'':'disabled')}</div><p class="field-note">Use up to 32 frames with matching dimensions. Previewed here and in tilemaps; exported to Godot.</p></section>
-    <section class="panel-section">${sectionTitle('YOUR TILESET')}<dl class="spec-list"><div><dt>${t.imported?'Tiles imported':'Tiles generated'}</dt><dd>${t.masks.length}</dd></div><div><dt>Atlas size</dt><dd>${t.width} × ${t.height}</dd></div><div><dt>Projection</dt><dd>${t.imported?'Original image':settings().tile.isometric?'Isometric':'Orthogonal'}</dd></div><div><dt>Animations</dt><dd>${Object.keys(t.animations||{}).length}</dd></div></dl>${button('godot-export','download','Export to Godot 4','button accent full-width')}</section>`;
-  drawTilePreview();
+    <section class="panel-section">${sectionTitle('YOUR AUTO TERRAIN')}<dl class="spec-list"><div><dt>${t.imported?'Tiles imported':'Tiles generated'}</dt><dd>${t.masks.length}</dd></div><div><dt>Atlas size</dt><dd>${t.width} × ${t.height}</dd></div><div><dt>Projection</dt><dd>${t.imported?'Original image':settings().tile.isometric?'Isometric':'Orthogonal'}</dd></div><div><dt>Animations</dt><dd>${Object.keys(t.animations||{}).length}</dd></div></dl>${button('godot-export','download','Export to Godot 4','button accent full-width')}</section>`;
+  drawTilePreview();drawBorderTexturePreviews();
 }
 function spriteOptions(selected){return workspace.sprites.map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${escape(s.name)}</option>`).join('');}
 function paintCanvas(canvas, pixels, width, height) {
@@ -333,9 +369,8 @@ function updateSelectionTransforms(count=state.selection?.reduce((n,v)=>n+v,0)||
 function mapDecalPreview(point=state.cursor){
   if(state.view!=='map'||state.mapTool!=='paint'||state.drag||!point)return null;
   const p=point,m=currentMap();if(p.x<0||p.y<0||p.x>=m.width*m.cellWidth||p.y>=m.height*m.cellHeight)return null;
-  const brush=mapBrushOptions().find(b=>b.id===state.mapTile);if(brush?.kind!=='texture')return null;
-  const image=workspace.sprites.find(s=>s.id===brush.assetId);if(!image||image.width<=m.cellWidth&&image.height<=m.cellHeight)return null;
-  return {image:{...image,pixels:composite(image)},x:Math.floor(p.x/m.cellWidth)*m.cellWidth,y:Math.floor(p.y/m.cellHeight)*m.cellHeight};
+  const brush=mapBrushOptions().find(b=>b.id===state.mapTile);if(brush?.kind!=='pattern')return null;
+  return {image:patternImage(brush),x:Math.floor(p.x/m.cellWidth)*m.cellWidth,y:Math.floor(p.y/m.cellHeight)*m.cellHeight};
 }
 function fitCanvas() {
   const stage=$('#stage'), d=dimensions();if(!stage)return;
@@ -392,7 +427,7 @@ function bindStage() {
   stage.addEventListener('pointermove',e=>{
     const p=canvasPoint(e);state.cursor=p;updateCursor();
     if(state.view==='map'&&!state.drag)drawOverlay();
-    const d=dimensions();const label=$('#pointer-status');if(label)label.innerHTML=`${icon(state.view==='tiles'?'tiles':toolList.find(t=>t[0]===state.tool)?.[1]||'pencil')}<span>${p.x>=0&&p.y>=0&&p.x<d.width&&p.y<d.height?`X: ${p.x} <span class="coordinate-y">Y: ${p.y}</span>`:state.view==='tiles'?'Tileset preview':toolList.find(t=>t[0]===state.tool)?.[2]}</span>`;
+    const d=dimensions();const label=$('#pointer-status');if(label)label.innerHTML=`${icon(state.view==='tiles'?'tiles':toolList.find(t=>t[0]===state.tool)?.[1]||'pencil')}<span>${p.x>=0&&p.y>=0&&p.x<d.width&&p.y<d.height?`X: ${p.x} <span class="coordinate-y">Y: ${p.y}</span>`:state.view==='tiles'?'Auto terrain preview':toolList.find(t=>t[0]===state.tool)?.[2]}</span>`;
     const drag=state.drag;if(!drag)return;
     if(drag.type==='pan'){state.pan.x=drag.pan.x+e.clientX-drag.clientX;state.pan.y=drag.pan.y+e.clientY-drag.clientY;positionCanvas();return;}
     if(drag.type==='map-draw'||drag.type==='map-rect'){mapPointerMove(p);return;}
@@ -429,23 +464,45 @@ function renameDialog(isLayer=false,layerId=null) {
   const target=isLayer?(activeDocument().layers.find(l=>l.id===layerId)||(state.view==='map'?currentMapLayer():layer())):activeDocument();showDialog(isLayer?'Name this layer':'Name your document','Give this little piece of your world a name.',nameField(target.name),'Save name',data=>{checkpoint();target.name=data.get('name').trim()||'Untitled';changed();closeDialog();render();});
 }
 function resizeDialog() {
-  showDialog('Room to grow','Resize your canvas or scale every pixel.',`${sizeFields(sprite().width,sprite().height)}<label class="field-label">Resize method<select name="method"><option value="canvas">Canvas size · anchor at top left</option><option value="scale">Scale artwork · nearest neighbor</option></select></label><p class="field-note">Reducing canvas size crops pixels from the right and bottom. You can undo this change.</p>`,'Resize canvas',data=>{const width=Number(data.get('width')),height=Number(data.get('height'));checkCapacity((width*height-sprite().width*sprite().height)*sprite().layers.length);const resized=resizeSprite(sprite(),width,height,data.get('method')==='scale');checkpoint();replaceSprite(resized);state.selection=null;changed();closeDialog();render();fitCanvas();});
+  showDialog('Room to grow','Resize your canvas or scale every pixel.',`${sizeFields(sprite().width,sprite().height)}<label class="field-label">Resize method<select name="method"><option value="canvas">Canvas size · anchor at top left</option><option value="scale">Scale artwork · nearest neighbor</option></select></label><p class="field-note">Reducing canvas size crops pixels from the right and bottom. You can undo this change.</p>`,'Resize canvas',data=>{const width=Number(data.get('width')),height=Number(data.get('height'));checkCapacity((width*height-sprite().width*sprite().height)*sprite().layers.length);if((width!==sprite().width||height!==sprite().height)&&workspace.tilemaps.some(m=>(m.patterns||[]).some(p=>p.tiles.some(t=>t.assetId===sprite().id))||m.layers.some(l=>l.terrain?.some((type,i)=>type===7&&m.sources?.[(l.sources?.[i]||0)-1]?.assetId===sprite().id))))throw new Error('This texture sheet is used by map tiles or patterns. Duplicate the sprite before changing its grid dimensions.');const resized=resizeSprite(sprite(),width,height,data.get('method')==='scale');checkpoint();replaceSprite(resized);state.selection=null;changed();closeDialog();render();fitCanvas();});
 }
 function libraryDialog() {
   closeDialog();if(state.view!=='library')setView('library');else renderLibraryPage();
 }
 function renderLibraryPage() {
-  $('#app').innerHTML=`${headerMarkup()}<div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<span>Library</span></div><div id="save-status"></div></div><main class="library-page"><div class="library-page-heading"><div><span class="eyebrow">YOUR PIXEL UNIVERSE</span><h1>Your little collection<span>.</span></h1><p>Every sprite, every tile, every world. All in one place.</p></div><span class="library-total">${allAssets().length}<small>saved assets</small></span></div><div class="library-creation"><button data-action="new">${icon('pencil')}<span><strong>New sprite</strong><small>Start with a single pixel</small></span>${icon('plus')}</button><button data-action="new-tileset">${icon('tiles')}<span><strong>New tileset</strong><small>Connect your terrains</small></span>${icon('plus')}</button><button data-action="new-map">${icon('grid')}<span><strong>New tilemap</strong><small>Build somewhere new</small></span>${icon('plus')}</button></div><div class="library-browse-bar"><div class="library-filters">${[['all','All assets'],['sprite','Sprites'],['tileset','Tilesets'],['tilemap','Tilemaps']].map(([kind,name])=>`<button class="${state.libraryFilter===kind?'active':''}" data-action="library-filter" data-kind="${kind}">${name}<span>${kind==='all'?allAssets().length:allAssets().filter(a=>a.kind===kind).length}</span></button>`).join('')}</div><input id="library-search" type="search" placeholder="Find something you made…" aria-label="Search library" value="${escape(state.librarySearch)}"/><div class="library-imports">${button('import-image','upload','Image','button outlined')}${button('import-atlas','tiles','Tileset','button outlined')}</div></div><div id="library-results"></div></main>${footerMarkup()}`;
+  $('#app').innerHTML=`${headerMarkup()}<div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<span>Library</span></div><div id="save-status"></div></div><main class="library-page"><div class="library-page-heading"><div><span class="eyebrow">YOUR PIXEL UNIVERSE</span><h1>Your little collection<span>.</span></h1><p>Every sprite, every tile, every world. All in one place.</p></div><span class="library-total">${allAssets().length}<small>saved assets</small></span></div><div class="library-creation"><button data-action="new">${icon('pencil')}<span><strong>New sprite</strong><small>Start with a single pixel</small></span>${icon('plus')}</button><button data-action="new-tileset">${icon('tiles')}<span><strong>New auto terrain</strong><small>Generate terrain transitions</small></span>${icon('plus')}</button><button data-action="new-collection">${icon('folder')}<span><strong>New tileset</strong><small>Collect auto terrains for Godot 4</small></span>${icon('plus')}</button><button data-action="new-map">${icon('grid')}<span><strong>New tilemap</strong><small>Build somewhere new</small></span>${icon('plus')}</button></div><div class="library-browse-bar"><div class="library-filters">${[['all','All assets'],['sprite','Sprites'],['tileset','Auto terrains'],['tilemap','Tilemaps']].map(([kind,name])=>`<button class="${state.libraryFilter===kind?'active':''}" data-action="library-filter" data-kind="${kind}">${name}<span>${kind==='all'?allAssets().length:allAssets().filter(a=>a.kind===kind).length}</span></button>`).join('')}</div><input id="library-search" type="search" placeholder="Find something you made…" aria-label="Search library" value="${escape(state.librarySearch)}"/><div class="library-imports">${button('import-image','upload','Image','button outlined')}${button('import-atlas','tiles','Tileset','button outlined')}</div></div><section class="tileset-collections">${sectionTitle('TILESET COLLECTIONS')}<p class="field-note">Combine auto terrains into one Godot 4 TileSet. Each terrain supplies its generated transitions.</p><div class="collection-list">${workspace.collections.map(c=>`<article><strong>${escape(c.name)}</strong><span>${c.terrainIds.length} terrains</span>${button('edit-collection','pencil','Edit','button outlined',`data-id="${c.id}"`)}${button('export-collection','download','Godot 4','button accent',`data-id="${c.id}"`)}${iconButton('delete-collection','trash','Delete collection',`data-id="${c.id}"`)}</article>`).join('')||'<p class="field-note">Create a tileset to choose which terrains belong together.</p>'}</div></section><div id="library-results"></div></main>${footerMarkup()}`;
   renderLibraryResults();updateSaveStatus();
 }
 function renderLibraryResults() {
   const assets=allAssets().filter(a=>(state.libraryFilter==='all'||a.kind===state.libraryFilter)&&a.name.toLowerCase().includes(state.librarySearch.toLowerCase()));
-  $('#library-results').innerHTML=assets.length?`<div class="library-grid">${assets.map(a=>`<article class="library-card"><button class="library-open" data-action="open-tab" data-id="${a.id}"><span class="library-preview checker"><canvas data-asset-preview="${a.id}"></canvas><span class="file-badge">${a.kind.toUpperCase()}</span></span><strong>${escape(a.name)}</strong><span>${a.width} × ${a.height} ${a.kind==='tilemap'?'cells':'px'}${a.layers?` · ${a.layers.length} layers`:` · ${a.masks.length} tiles`}</span></button><div class="library-card-actions">${button('duplicate-asset','copy','Duplicate','text-button',`data-id="${a.id}"`)}${iconButton('delete-asset','trash',`Delete ${a.name}`,`data-id="${a.id}" ${workspace.sprites.length===1&&a.kind==='sprite'?'disabled':''}`)}</div></article>`).join('')}</div>`:'<div class="library-empty"><h2>Room for something new.</h2><p>No assets match this view. Create a document or try another search.</p></div>';
+  $('#library-results').innerHTML=assets.length?`<div class="library-grid">${assets.map(a=>`<article class="library-card"><button class="library-open" data-action="open-tab" data-id="${a.id}"><span class="library-preview checker"><canvas data-asset-preview="${a.id}"></canvas><span class="file-badge">${(a.kind==='tileset'?(a.imported?'TILE ATLAS':'AUTO TERRAIN'):a.kind.toUpperCase())}</span></span><strong>${escape(a.name)}</strong><span>${a.width} × ${a.height} ${a.kind==='tilemap'?'cells':'px'}${a.layers?` · ${a.layers.length} layers`:` · ${a.masks.length} tiles`}</span></button><div class="library-card-actions">${button('duplicate-asset','copy','Duplicate','text-button',`data-id="${a.id}"`)}${iconButton('delete-asset','trash',`Delete ${a.name}`,`data-id="${a.id}" ${workspace.sprites.length===1&&a.kind==='sprite'?'disabled':''}`)}</div></article>`).join('')}</div>`:'<div class="library-empty"><h2>Room for something new.</h2><p>No assets match this view. Create a document or try another search.</p></div>';
   drawThumbnails();
 }
-function newDocumentDialog(){showDialog('What will you make?','Open a fresh document alongside your current work.',`<div class="new-document-options">${button('new','pencil','Pixel sprite','button outlined full-width')}${button('new-tileset','tiles','Terrain tileset','button outlined full-width')}${button('new-map','grid','Tilemap','button outlined full-width')}</div>`,null);}
+function newDocumentDialog(){showDialog('What will you make?','Open a fresh document alongside your current work.',`<div class="new-document-options">${button('new','pencil','Pixel sprite','button outlined full-width')}${button('new-tileset','tiles','Auto terrain','button outlined full-width')}${button('new-collection','folder','Tileset collection','button outlined full-width')}${button('new-map','grid','Tilemap','button outlined full-width')}</div>`,null);}
+function collectionDialog(id=null,exportOnly=false){
+  const current=workspace.collections.find(c=>c.id===id),selected=current?.terrainIds||[state.tile?.id].filter(Boolean);
+  if(!workspace.tilesets.length){toast('Generate an auto terrain first.');return;}
+  showDialog(exportOnly?'Export a Godot 4 tileset':current?'Edit tileset collection':'New tileset collection','Choose the auto terrains to combine in one TileSet resource.',`${nameField(current?.name||'World tileset')}<div class="collection-choices">${workspace.tilesets.map(t=>`<label><input type="checkbox" name="terrain" value="${t.id}" ${selected.includes(t.id)?'checked':''}/><span>${escape(t.name)}<small>${t.tileWidth} × ${t.tileHeight} px · ${t.imported?'Tile atlas':t.options.mode==='blob'?'Blob terrain':'Corner terrain'}</small></span></label>`).join('')}</div><p class="field-note">Terrains must use the same tile size and projection. Shared texture materials connect within each matching mode. Add generated transitions for every material pair you need.</p>`,exportOnly?'Download tileset':'Save tileset',async data=>{
+    const terrainIds=data.getAll('terrain');if(!terrainIds.length)throw new Error('Select at least one auto terrain.');
+    const terrains=terrainIds.map(id=>workspace.tilesets.find(t=>t.id===id)),base=terrains[0];
+    if(terrains.some(t=>t.tileWidth!==base.tileWidth||t.tileHeight!==base.tileHeight||(!t.imported&&!!t.options.isometric)!==(!base.imported&&!!base.options.isometric)))throw new Error('Choose terrains with the same tile size and projection.');
+    const collection={id:current?.id||uid(),name:data.get('name').trim()||'World tileset',terrainIds};
+    if(exportOnly){await exportCollection(collection);return;}
+    if(current)Object.assign(current,collection);else{if(workspace.collections.length>=100)throw new Error('Your workspace holds up to 100 tileset collections.');workspace.collections.push(collection);}
+    changed();closeDialog();if(state.view==='library')renderLibraryPage();
+  });
+}
+async function exportCollection(collection){
+  const pack=await godotCollectionPackage(collection,workspace.tilesets,workspace.sprites,encodePNG);
+  pack.files.push({name:`${pack.folder}/collection.json`,data:JSON.stringify({...collection,terrains:collection.terrainIds.map((id,i)=>({...atlasJSON(workspace.tilesets.find(t=>t.id===id)),id,image:`terrain-${i+1}/atlas.png`}))},null,2)});
+  download(zipFiles(pack.files),`${safeName(collection.name)}-godot4.zip`);toast('Tileset exported with all selected terrains and animations.');
+}
+function deleteCollection(id){
+  const c=workspace.collections.find(c=>c.id===id);if(!c)return;
+  showDialog('Delete tileset collection?',c.name,'<p class="field-note">Your auto terrains and maps stay in the library.</p>','Delete collection',()=>{workspace.collections=workspace.collections.filter(c=>c.id!==id);changed();closeDialog();renderLibraryPage();});
+}
 function newTileset(sourceId=null){
-  if(workspace.tilesets.length>=100)throw new Error('Your workspace holds up to 100 tilesets.');saveTabView();state.tile=null;state.view='tiles';state.selectedTile=0;
+  if(workspace.tilesets.length>=100)throw new Error('Your workspace holds up to 100 auto terrains and tile atlases.');saveTabView();state.tile=null;state.view='tiles';state.selectedTile=0;
   settings().tile={...settings().tile,overrides:{},terrainA:sourceId||settings().tile.terrainA};regenerate();rememberTab(state.tile);changed();closeDialog();render();fitCanvas();
 }
 function closeTab(id){
@@ -478,7 +535,7 @@ function transformSelectedRegion(rotation=0,flipX=false,flipY=false){
 }
 function newMapDialog(atlasId=null){
   const selected=atlasId||state.tile?.id||workspace.tilesets[0]?.id;
-  showDialog('A world of your own','Mix any library tilesets and textures. Maps autosave as you build.',`${nameField('Untitled world')}${sizeFields(32,24,256)}<label class="field-label">Initial cell size<select name="tileset"><option value="">16 × 16 px</option>${workspace.tilesets.map(t=>`<option value="${t.id}" ${t.id===selected?'selected':''}>${escape(t.name)} · ${t.tileWidth} × ${t.tileHeight} px</option>`).join('')}</select></label><p class="field-note">The initial tileset sets the cell size. You can paint from every tileset and texture. Width and height are in cells. Start with up to 256 × 256 cells, within a 4096 × 4096 pixel render.</p>`,'Create tilemap',data=>{if(workspace.tilemaps.length>=100)throw new Error('Your workspace holds up to 100 tilemaps.');const atlas=workspace.tilesets.find(t=>t.id===data.get('tileset')),m=makeTilemap(data.get('name').trim()||'Untitled world',Number(data.get('width')),Number(data.get('height')),atlas);checkCapacity(m.width*m.height);workspace.tilemaps.push(m);openDocument(m.id);});
+  showDialog('A world of your own','Mix terrains, texture tiles, and saved patterns. Maps autosave as you build.',`${nameField('Untitled world')}${sizeFields(32,24,256)}<label class="field-label">Initial cell size<select name="tileset" id="new-map-terrain"><option value="">Custom texture grid</option>${workspace.tilesets.map(t=>`<option value="${t.id}" ${t.id===selected?'selected':''}>${escape(t.name)} · ${t.tileWidth} × ${t.tileHeight} px</option>`).join('')}</select></label><div class="compact-fields"><label class="field-label">Cell width (px)<input name="cell-width" type="number" min="8" max="512" value="${workspace.tilesets.find(t=>t.id===selected)?.tileWidth||16}" required/></label><label class="field-label">Cell height (px)<input name="cell-height" type="number" min="8" max="512" value="${workspace.tilesets.find(t=>t.id===selected)?.tileHeight||16}" required/></label></div><p class="field-note">Choose the grid used to slice texture sheets. The initial terrain suggests a cell size. You can paint from every terrain and texture sheet. Width and height are in cells. Start with up to 256 × 256 cells, within a 4096 × 4096 pixel render.</p>`,'Create tilemap',data=>{if(workspace.tilemaps.length>=100)throw new Error('Your workspace holds up to 100 tilemaps.');const atlas=workspace.tilesets.find(t=>t.id===data.get('tileset')),m=makeTilemap(data.get('name').trim()||'Untitled world',Number(data.get('width')),Number(data.get('height')),{id:atlas?.id||null,tileWidth:Number(data.get('cell-width')),tileHeight:Number(data.get('cell-height'))});checkCapacity(m.width*m.height);workspace.tilemaps.push(m);openDocument(m.id);});
 }
 function mapTextures(atlas){
   return ['terrainA','terrainB'].map(key=>{
@@ -487,28 +544,65 @@ function mapTextures(atlas){
   });
 }
 function mapPaletteAtlas(){return workspace.tilesets.find(t=>t.id===(state.mapSourceId||currentMap().tilesetId));}
+function textureSelectionBrush(){
+  const m=currentMap(),s=workspace.sprites.find(s=>s.id===state.mapTextureId)||workspace.sprites[0];
+  if(!s)return null;
+  state.mapTextureId=s.id;
+  const cols=Math.ceil(s.width/m.cellWidth),rows=Math.ceil(s.height/m.cellHeight),selection=state.textureSelection;
+  const a=selection?.assetId===s.id?Math.min(selection.start,cols*rows-1):0,b=selection?.assetId===s.id?Math.min(selection.end,cols*rows-1):a;
+  const x=Math.min(a%cols,b%cols),y=Math.min(Math.floor(a/cols),Math.floor(b/cols)),width=Math.abs(a%cols-b%cols)+1,height=Math.abs(Math.floor(a/cols)-Math.floor(b/cols))+1;
+  const tiles=Array.from({length:width*height},(_,i)=>({kind:'texture-tile',assetId:s.id,value:(y+Math.floor(i/width))*cols+x+i%width}));
+  return {id:'selection',kind:'pattern',name:`${s.name} · ${width} × ${height}`,width,height,tiles};
+}
 function mapBrushOptions(){
   const atlas=mapPaletteAtlas();
-  if(!atlas)return workspace.sprites.map(s=>({id:s.id,name:s.name,image:null,kind:'texture',assetId:s.id}));
+  if(!atlas)return [textureSelectionBrush(),...(currentMap().patterns||[]).map(p=>({...p,kind:'pattern'}))].filter(Boolean);
   const textures=atlas.id===currentMap().tilesetId&&currentMap().textures?currentMap().textures:mapTextures(atlas);
-  return [...(atlas.imported?[]:textures.map((t,i)=>({id:i+1,name:t.name,image:t,kind:'terrain',value:i+1,assetId:atlas.id})).concat([{id:3,name:'Autotile · '+atlas.name,image:extractTile(atlas,tileDescriptors(atlas).find(t=>t.mask===(atlas.options.mode==='blob'?255:15))?.id??0),kind:'terrain',value:3,assetId:atlas.id}])),...tileDescriptors(atlas).map(t=>({id:100+t.id,name:`Tile ${t.id+1} · ${t.kind}`,image:null,tile:t.id,kind:'tile',value:t.id,assetId:atlas.id}))];
+  return [...(atlas.imported?[]:textures.map((t,i)=>({id:i+1,name:t.name,image:t,kind:'terrain',value:i+1,assetId:atlas.id})).concat([{id:3,name:'Auto terrain · '+atlas.name,image:extractTile(atlas,tileDescriptors(atlas).find(t=>t.mask===(atlas.options.mode==='blob'?255:15))?.id??0),kind:'terrain',value:3,assetId:atlas.id}])),...tileDescriptors(atlas).map(t=>({id:100+t.id,name:`Tile ${t.id+1} · ${t.kind}`,image:null,tile:t.id,kind:'tile',value:t.id,assetId:atlas.id}))];
+}
+function patternImage(pattern){
+  const m=currentMap(),width=pattern.width*m.cellWidth,height=pattern.height*m.cellHeight,pixels=new Uint32Array(width*height),cache=new Map();
+  pattern.tiles.forEach((tile,i)=>{
+    const s=workspace.sprites.find(s=>s.id===tile.assetId);if(!s)return;
+    if(!cache.has(s.id))cache.set(s.id,composite(s));
+    const image=textureTile(s,m.cellWidth,m.cellHeight,tile.value,cache.get(s.id));
+    for(let y=0;y<m.cellHeight;y++)pixels.set(image.pixels.subarray(y*m.cellWidth,(y+1)*m.cellWidth),(Math.floor(i/pattern.width)*m.cellHeight+y)*width+i%pattern.width*m.cellWidth);
+  });return {width,height,pixels};
 }
 function renderMapLeft(){
-  const atlas=mapPaletteAtlas(),brushes=mapBrushOptions();
+  const atlas=mapPaletteAtlas(),brushes=mapBrushOptions(),m=currentMap(),collection=workspace.collections.find(c=>c.id===state.mapCollectionId);
   if(!brushes.some(b=>b.id===state.mapTile))state.mapTile=brushes[0]?.id;
   const palette=items=>items.map(t=>`<button data-action="map-tile" data-index="${t.id}" class="checker ${state.mapTile===t.id?'active':''}" title="${escape(t.name)}" aria-label="Paint ${escape(t.name)}" aria-pressed="${state.mapTile===t.id}"><canvas data-map-brush="${t.id}"></canvas><span>${t.kind==='tile'?t.value+1:escape(t.name)}</span></button>`).join('');
-  $('#left-panel').innerHTML=`<section class="panel-section">${sectionTitle('MAP TOOLS')}<div class="map-tools">${[['paint','pencil','Paint'],['erase','eraser','Erase'],['fill','bucket','Fill'],['rect','select','Rectangle'],['picker','picker','Pick brush'],['pan','hand','Pan']].map(([id,glyph,name])=>`<button data-action="map-tool" data-tool="${id}" class="${state.mapTool===id?'active':''}" aria-pressed="${state.mapTool===id}">${icon(glyph)}<span>${name}</span></button>`).join('')}</div><p class="field-note">Mix tilesets and textures on any layer. Right-click erases. Hold Space to pan.</p></section><section class="panel-section map-palette-section">${sectionTitle('TILESETS & TEXTURES')}<label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>All textures · ${workspace.sprites.length}</option>${workspace.tilesets.map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · imported':''}</option>`).join('')}</select></label><p class="field-note">${!atlas?'Textures up to a cell repeat. Larger textures show their full placement while you hover and place as one free stamp.':atlas.imported?'Choose any tile to paint. Tiles fit the map’s fixed cell size.':'Choose connected autoterrain or paint individual tiles. Tiles fit the map’s fixed cell size.'}</p><div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit tileset','button outlined full-width')}</div>`:''}`;
-  document.querySelectorAll('[data-map-brush]').forEach(c=>{const b=brushes.find(b=>String(b.id)===c.dataset.mapBrush),s=b.kind==='texture'?workspace.sprites.find(s=>s.id===b.assetId):null,t=b.image||(s?{...s,pixels:composite(s)}:extractTile(atlas,b.tile));paintCanvas(c,t.pixels,t.width,t.height);});
+  const texture=workspace.sprites.find(s=>s.id===state.mapTextureId)||workspace.sprites[0],selection=textureSelectionBrush(),selected=new Set(selection?.tiles.map(t=>t.value));
+  $('#left-panel').innerHTML=`<section class="panel-section">${sectionTitle('MAP TOOLS')}<div class="map-tools">${[['paint','pencil','Paint'],['erase','eraser','Erase'],['fill','bucket','Fill'],['rect','select','Rectangle'],['picker','picker','Pick brush'],['pan','hand','Pan']].map(([id,glyph,name])=>`<button data-action="map-tool" data-tool="${id}" class="${state.mapTool===id?'active':''}" aria-pressed="${state.mapTool===id}">${icon(glyph)}<span>${name}</span></button>`).join('')}</div><p class="field-note">Mix terrains and texture patterns on any layer. Export the complete map as one PNG. Right-click erases.</p></section><section class="panel-section map-palette-section">${sectionTitle('TERRAINS & PATTERNS')}
+  <label class="field-label">Tileset collection<select id="map-collection"><option value="">All library terrains</option>${workspace.collections.map(c=>`<option value="${c.id}" ${collection?.id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}</select></label>
+  <label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>Texture tiles & patterns</option>${workspace.tilesets.filter(t=>!collection||collection.terrainIds.includes(t.id)).map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · tile atlas':' · auto terrain'}</option>`).join('')}</select></label>
+  ${!atlas?`<label class="field-label">Texture sheet<select id="map-texture">${spriteOptions(texture?.id)}</select></label><p class="field-note">${m.cellWidth} × ${m.cellHeight} px grid. Click a tile; Shift-click another to select a rectangular pattern. Paint stamps it; Fill and Rectangle repeat it. Partial edge tiles are transparent outside the image.</p><div class="texture-grid-scroll"><div class="texture-tile-grid" style="grid-template-columns:repeat(${Math.ceil(texture.width/m.cellWidth)},40px)">${textureTiles(texture,m.cellWidth,m.cellHeight).map(t=>`<button class="checker ${selected.has(t.id)?'active':''}" data-action="texture-tile" data-index="${t.id}" title="Tile ${t.id+1}" aria-label="Texture tile ${t.id+1}" aria-pressed="${selected.has(t.id)}"><canvas data-texture-tile="${t.id}"></canvas></button>`).join('')}</div></div>${button('save-map-pattern','plus','Save selected pattern','button outlined full-width')}<p class="field-label">SELECTED & SAVED PATTERNS</p>`:'<p class="field-note">Choose connected auto terrain or an individual tile.</p>'}
+  <div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${!atlas&&state.mapTile!=='selection'?button('delete-map-pattern','trash','Delete selected pattern','text-button'):''}${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit auto terrain','button outlined full-width')}</div>`:''}`;
+  document.querySelectorAll('[data-map-brush]').forEach(c=>{const b=brushes.find(b=>String(b.id)===c.dataset.mapBrush),t=b.kind==='pattern'?patternImage(b):b.image||extractTile(atlas,b.tile);paintCanvas(c,t.pixels,t.width,t.height);});
+  if(!atlas){const pixels=composite(texture);document.querySelectorAll('[data-texture-tile]').forEach(c=>{const t=textureTile(texture,m.cellWidth,m.cellHeight,Number(c.dataset.textureTile),pixels);paintCanvas(c,t.pixels,t.width,t.height);});}
 }
 function selectedMapBrush(){
   const m=currentMap(),b=mapBrushOptions().find(b=>b.id===state.mapTile);
   if(!b)return {source:0,kind:'tile',value:0};
-  if(b.kind!=='texture'&&b.assetId===m.tilesetId)return {...b,source:0};
-  m.sources ||= [];
-  const kind=b.kind==='texture'?'texture':'tileset';
-  let index=m.sources.findIndex(s=>s.kind===kind&&s.assetId===b.assetId);
-  if(index<0){index=m.sources.length;m.sources.push({kind,assetId:b.assetId});}
-  return {...b,source:index+1};
+  const resolve=b=>{
+    if(b.kind!=='texture-tile'&&b.assetId===m.tilesetId)return {...b,source:0};
+    m.sources ||= [];
+    const kind=b.kind==='texture-tile'?'texture':'tileset';
+    let index=m.sources.findIndex(s=>s.kind===kind&&s.assetId===b.assetId);
+    if(index<0){index=m.sources.length;m.sources.push({kind,assetId:b.assetId});}
+    return {...b,source:index+1};
+  };
+  return b.kind==='pattern'?{...b,tiles:b.tiles.map(resolve)}:resolve(b);
+}
+function saveMapPattern(){
+  const m=currentMap(),pattern=textureSelectionBrush();if(!pattern)return;
+  if(pattern.width>64||pattern.height>64)throw new Error('Select a pattern up to 64 × 64 tiles.');
+  if((m.patterns?.length||0)>=100)throw new Error('A map holds up to 100 saved patterns.');
+  showDialog('Save texture pattern','Reuse this selection anywhere in this map.',nameField(pattern.name),'Save pattern',data=>{
+    checkCapacity(pattern.tiles.length);checkpoint();const {kind,...saved}=pattern;saved.id=uid();saved.name=data.get('name').trim()||pattern.name;
+    (m.patterns||=[]).push(saved);state.mapTile=saved.id;changed();closeDialog();renderLeft();
+  });
 }
 function layerRowActions(doc,l,map=false){
   const prefix=map?'map-':'',index=doc.layers.indexOf(l),id=`data-id="${l.id}"`;
@@ -533,27 +627,27 @@ function renderMapRight(){
 function mapPointerDown(p,e){
   const m=currentMap(),x=Math.floor(p.x/m.cellWidth),y=Math.floor(p.y/m.cellHeight),l=currentMapLayer();
   if(x<0||y<0||x>=m.width||y>=m.height)return;
-  const tool=e.button===2?'erase':state.mapTool,preview=mapDecalPreview(p);
+  const tool=e.button===2?'erase':state.mapTool;
   if(tool==='picker'||(e.ctrlKey&&e.button!==2)){
     const i=y*m.width+x,type=l.terrain?.[i]||0,source=m.sources?.[(l.sources?.[i]||0)-1];
     if(type===4||(!type&&!l.cells[i]))return;
-    state.mapSourceId=source?.kind==='texture'?'textures':source?.assetId||m.tilesetId;
+    state.mapCollectionId='';state.mapSourceId=source?.kind==='texture'?'textures':source?.assetId||m.tilesetId;
+    if(type===7||type===6){state.mapTextureId=source.assetId;state.textureSelection={assetId:source.assetId,start:Math.max(0,l.cells[i]-1),end:Math.max(0,l.cells[i]-1)};state.mapTile='selection';renderMapLeft();return;}
     state.mapTile=type===6?source.assetId:type===5?3:type||100+l.cells[i]-1;renderMapLeft();return;
   }
   if(!l.visible){toast('Show the active map layer before painting.');return;}
   const atlas=mapPaletteAtlas(),textures=m.textures||(atlas?.id===m.tilesetId&&!atlas.imported?mapTextures(atlas):null);
   checkCapacity((l.terrain?0:m.width*m.height)+(l.sources?0:m.width*m.height)+(m.textures||!textures?0:textures.reduce((n,t)=>n+t.width*t.height,0)));
   checkpoint();if(textures)m.textures=textures;
-  const brush=selectedMapBrush();
-  if(preview&&tool==='paint'){placeMapDecal(m,l,preview.x,preview.y,brush.source);changed();updateCanvas();return;}
+  const brush=selectedMapBrush();if(brush.kind==='pattern'&&['fill','rect'].includes(tool))brush.origin={x,y};
   if(tool==='erase'&&eraseMapDecal(l,p.x,p.y,workspace,m)){changed();updateCanvas();return;}
-  if(tool==='rect'){state.drag={type:'map-rect',start:{x,y},cells:new Uint32Array(l.cells),terrain:new Uint32Array(l.terrain||m.width*m.height),sources:new Uint32Array(l.sources||m.width*m.height),brush};paintMapBrush(m,l,x,y,brush);}
+  if(tool==='rect'){state.drag={type:'map-rect',start:{x,y},cells:new Uint32Array(l.cells),terrain:new Uint32Array(l.terrain||m.width*m.height),sources:new Uint32Array(l.sources||m.width*m.height),brush};paintMapBrush(m,l,x,y,brush,'rect');}
   else {paintMapBrush(m,l,x,y,brush,tool);state.drag=tool==='fill'?null:{type:'map-draw',last:{x,y},tool,brush};}
   resolveMapTerrain(m,l,workspace);if(!state.drag)changed();updateCanvas();
 }
 function mapPointerMove(p){
   const m=currentMap(),l=currentMapLayer(),x=clamp(Math.floor(p.x/m.cellWidth),0,m.width-1),y=clamp(Math.floor(p.y/m.cellHeight),0,m.height-1),drag=state.drag;
-  if(drag.type==='map-rect'){l.cells=new Uint32Array(drag.cells);l.terrain=new Uint32Array(drag.terrain);l.sources=new Uint32Array(drag.sources);for(let py=Math.min(y,drag.start.y);py<=Math.max(y,drag.start.y);py++)for(let px=Math.min(x,drag.start.x);px<=Math.max(x,drag.start.x);px++)paintMapBrush(m,l,px,py,drag.brush);}
+  if(drag.type==='map-rect'){l.cells=new Uint32Array(drag.cells);l.terrain=new Uint32Array(drag.terrain);l.sources=new Uint32Array(drag.sources);for(let py=Math.min(y,drag.start.y);py<=Math.max(y,drag.start.y);py++)for(let px=Math.min(x,drag.start.x);px<=Math.max(x,drag.start.x);px++)paintMapBrush(m,l,px,py,drag.brush,'rect');}
   else {linePoints(drag.last.x,drag.last.y,x,y,(px,py)=>paintMapBrush(m,l,px,py,drag.brush,drag.tool));drag.last={x,y};}
   resolveMapTerrain(m,l,workspace);updateCanvas();
 }
@@ -562,7 +656,7 @@ function settingsDialog() {
   showDialog('A home for your pixels','Your work lives on this device, inside this browser.',`<label class="field-label">Appearance<select id="theme-setting">${[['system','System default'],['light','Light'],['dark','Dark']].map(([value,label])=>`<option value="${value}" ${(settings().theme||'system')===value?'selected':''}>${label}</option>`).join('')}</select></label><p class="field-note">System default follows your device’s light or dark appearance.</p><div class="storage-card"><span class="storage-icon">${icon('folder')}</span><div><strong>${allAssets().length} saved assets</strong><p>${(new Blob([JSON.stringify(serializeWorkspace(workspace))]).size/1024).toFixed(0)} KB · ${state.storage}</p></div><span class="live-badge">LOCAL</span></div><div class="settings-action"><div><h3>Take your workspace with you</h3><p>Export sprites, layers, tilesets, tilemaps, animations, open tabs, palettes, and settings in one JSON file.</p></div>${button('backup','download','Export workspace','button outlined')}</div><div class="settings-action"><div><h3>Restore a workspace</h3><p>Load a Pixfit JSON backup. You can merge it with your current collection.</p></div>${button('restore','upload','Import workspace','button outlined')}</div><div class="note-card">Browser data belongs to this browser and website address. Keep a backup before clearing site data or switching devices.</div>`,null);
 }
 function helpDialog() {
-  showDialog('Small tools. Big possibilities.','A few handy shortcuts to keep you in your flow.',`<div class="shortcut-grid">${[...toolList.map(t=>[t[2],t[3]]),['Undo','Ctrl / ⌘ Z'],['Redo','Ctrl / ⌘ Shift Z'],['Select all','Ctrl / ⌘ A'],['Deselect','Esc'],['Delete selection','Delete'],['Pan anywhere','Space + drag'],['Copy selection','Ctrl / ⌘ C'],['Cut selection','Ctrl / ⌘ X'],['Paste selection','Ctrl / ⌘ V'],['Pick a color','Ctrl + click'],['Zoom','Mouse wheel'],['Fit artwork','F'],['Swap colors','X'],['Brush size','[ and ]'],['Save workspace','Ctrl / ⌘ S']].map(([name,key])=>`<div><span>${name}</span><kbd>${key}</kbd></div>`).join('')}</div><div class="note-card">Selections restrict painting, erasing, filling, and dithering. The move tool moves the active layer or selection; Space + drag pans the workspace without bounds. Pixels moved outside the image are cropped and can be undone.</div><p class="field-note">Tileset builder: select two saved sprites as terrain textures, choose 16 corner masks or 47 blob masks, then generate. Export the PNG and its atlas JSON for game engines. GIF import uses the first frame.</p>`,null,null,true);
+  showDialog('Small tools. Big possibilities.','A few handy shortcuts to keep you in your flow.',`<div class="shortcut-grid">${[...toolList.map(t=>[t[2],t[3]]),['Undo','Ctrl / ⌘ Z'],['Redo','Ctrl / ⌘ Shift Z'],['Select all','Ctrl / ⌘ A'],['Deselect','Esc'],['Delete selection','Delete'],['Pan anywhere','Space + drag'],['Copy selection','Ctrl / ⌘ C'],['Cut selection','Ctrl / ⌘ X'],['Paste selection','Ctrl / ⌘ V'],['Pick a color','Ctrl + click'],['Zoom','Mouse wheel'],['Fit artwork','F'],['Swap colors','X'],['Brush size','[ and ]'],['Save workspace','Ctrl / ⌘ S']].map(([name,key])=>`<div><span>${name}</span><kbd>${key}</kbd></div>`).join('')}</div><div class="note-card">Selections restrict painting, erasing, filling, and dithering. The move tool moves the active layer or selection; Space + drag pans the workspace without bounds. Pixels moved outside the image are cropped and can be undone.</div><p class="field-note">Auto terrain builder: select two saved sprites as terrain textures, choose 16 corner masks or 47 blob masks, then generate. Export the PNG and its atlas JSON for game engines. GIF import uses the first frame.</p>`,null,null,true);
 }
 function download(blob,name) {
   const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
@@ -576,7 +670,7 @@ function atlasJSON(t) {
   return {format:'pixfit-atlas',version:2,image:`${safeName(t.name)}.png`,width:t.width,height:t.height,tileWidth:t.tileWidth,tileHeight:t.tileHeight,columns:t.columns,spacing:t.gap,projection:t.imported?'unspecified':t.options.isometric?'isometric':'orthogonal',mode:t.imported?'imported':t.options.mode,maskBits:t.options.mode==='blob'?{N:1,E:2,S:4,W:8,NE:16,SE:32,SW:64,NW:128}:{topLeft:1,topRight:2,bottomRight:4,bottomLeft:8},tiles:tileDescriptors(t),animations:t.animations||{},settings:t.options};
 }
 function mapAssetIds(m){
-  const ids=new Set([m.tilesetId,...(m.sources||[]).map(s=>s.assetId)]);
+  const ids=new Set([m.tilesetId,...(m.sources||[]).map(s=>s.assetId),...(m.patterns||[]).flatMap(p=>p.tiles.map(t=>t.assetId))]);
   for(const l of m.layers)for(let i=0;i<l.cells.length;i++)if([1,2].includes(l.terrain?.[i])&&l.sources?.[i]){
     const source=m.sources[l.sources[i]-1],atlas=workspace.tilesets.find(t=>t.id===source.assetId);
     ids.add(atlas?.options[l.terrain[i]===1?'terrainA':'terrainB']);
@@ -585,8 +679,8 @@ function mapAssetIds(m){
 }
 function exportDialog() {
   const tiles=state.view==='tiles',maps=state.view==='map',doc=activeDocument(),d=maps?renderTilemap(currentMap(),workspace,0):tiles?state.tile:{...sprite(),pixels:composite(sprite())};
-  showDialog(tiles||maps?'Ready for your next world?':'Let your pixels out.',tiles?'Export textures, animation, and tile metadata.':maps?'Export a map image or a package with every source tileset and texture.':'Save a crisp PNG with a transparent background.',`<div class="export-preview checker"><canvas id="export-preview"></canvas></div><label class="field-label">File format<select name="format"><option value="png">PNG image · transparent</option>${tiles?'<option value="atlas">Atlas JSON · tiles & animations</option><option value="godot">Godot 4 · TileSet + textures (.zip)</option>':''}${maps?'<option value="map">Tilemap package · map JSON + all sources (.zip)</option>':''}</select></label>${!tiles&&!maps?'<label class="field-label" id="export-scale-field">Export scale<select name="scale"><option value="1">1× · original pixels</option><option value="2">2× · double size</option><option value="4">4× · four times bigger</option><option value="8">8× · extra crisp</option></select></label>':'<p class="field-note">PNG exports a still frame. Godot packages include animated tiles and their textures. Full workspace backups are in Settings.</p>'}`,'Download',async data=>{
-    const format=data.get('format');if(format==='godot'){await exportGodot();return;}
+  showDialog(tiles||maps?'Ready for your next world?':'Let your pixels out.',tiles?'Export textures, animation, and tile metadata.':maps?'Export a map image or a package with every source tileset and texture.':'Save a crisp PNG with a transparent background.',`<div class="export-preview checker"><canvas id="export-preview"></canvas></div><label class="field-label">File format<select name="format"><option value="png">PNG image · transparent</option>${tiles?'<option value="atlas">Atlas JSON · tiles & animations</option><option value="godot">Godot 4 · Tileset collection (.zip)</option>':''}${maps?'<option value="map">Tilemap package · map JSON + all sources (.zip)</option>':''}</select></label>${!tiles&&!maps?'<label class="field-label" id="export-scale-field">Export scale<select name="scale"><option value="1">1× · original pixels</option><option value="2">2× · double size</option><option value="4">4× · four times bigger</option><option value="8">8× · extra crisp</option></select></label>':'<p class="field-note">PNG exports a still frame. Godot packages include animated tiles and their textures. Full workspace backups are in Settings.</p>'}`,'Download',async data=>{
+    const format=data.get('format');if(format==='godot'){collectionDialog(null,true);return;}
     if(format==='atlas')download(new Blob([JSON.stringify(atlasJSON(state.tile),null,2)],{type:'application/json'}),`${safeName(doc.name)}.atlas.json`);
     else if(format==='map'){
       const m=currentMap(),sourceIds=mapAssetIds(m),files=[],assets=[];
@@ -595,7 +689,7 @@ function exportDialog() {
         files.push({name:image,data:await encodePNG(pixels)});
         assets.push(asset.kind==='tileset'?{...atlasJSON(asset),id:asset.id,kind:asset.kind,name:asset.name,image}:{id:asset.id,kind:'texture',name:asset.name,width:asset.width,height:asset.height,image});
       }
-      const json={format:'pixfit-tilemap',version:3,...m,layers:m.layers.map(l=>({...l,cells:Array.from(l.cells),...(l.terrain?{terrain:Array.from(l.terrain)}:{}),...(l.sources?{sources:Array.from(l.sources)}:{})})),assets};
+      const json={format:'pixfit-tilemap',version:4,...m,layers:m.layers.map(l=>({...l,cells:Array.from(l.cells),...(l.terrain?{terrain:Array.from(l.terrain)}:{}),...(l.sources?{sources:Array.from(l.sources)}:{})})),assets};
       files.push({name:'map.json',data:JSON.stringify(json,null,2)},{name:'map.png',data:await encodePNG(d)});
       download(zipFiles(files),`${safeName(m.name)}.zip`);
     } else await downloadPNG(d.pixels,d.width,d.height,doc.name,Number(data.get('scale')||1));
@@ -603,7 +697,7 @@ function exportDialog() {
   });paintCanvas($('#export-preview'),d.pixels,d.width,d.height);
 }
 async function encodePNG(image){const canvas=document.createElement('canvas');paintCanvas(canvas,image.pixels,image.width,image.height);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not encode this image.');return new Uint8Array(await blob.arrayBuffer());}
-async function exportGodot(){const pack=await godotPackage(state.tile,encodePNG);pack.files.push({name:`${pack.folder}/atlas.json`,data:JSON.stringify({...atlasJSON(state.tile),image:'atlas.png'},null,2)});download(zipFiles(pack.files),`${safeName(state.tile.name)}-godot4.zip`);toast('Godot package exported. Extract the folder into your project root.');}
+
 function changeTile(patch,selected=false){
   checkpoint();const old=structuredClone(settings().tile);
   try{if(selected){settings().tile.overrides||={};settings().tile.overrides[state.selectedTile]={...(settings().tile.overrides[state.selectedTile]||{}),...patch};}else Object.assign(settings().tile,patch);regenerate();changed();renderLeft();renderRight();updateCanvas();}
@@ -631,10 +725,12 @@ function duplicateAsset(id){
   if(collection.length>=100)throw new Error('You can keep up to 100 assets of each type.');checkCapacity(original.kind==='tilemap'?workspacePixelCount({sprites:[],tilesets:[],tilemaps:[original]}):original.width*original.height*(original.layers?.length||1));
   const copy=structuredClone(original);copy.id=uid();copy.name=`${copy.name} copy`.slice(0,100);copy.updatedAt=Date.now();
   if(copy.layers){const active=copy.activeLayerId;for(const l of copy.layers){const previous=l.id;l.id=uid();if(previous===active)copy.activeLayerId=l.id;}}
+  for(const p of copy.patterns||[])p.id=uid();
   collection.push(copy);changed();renderLibraryPage();
 }
 function deleteAssetDialog(id){
   const asset=allAssets().find(a=>a.id===id);if(!asset)return;
+  if(workspace.collections.some(c=>c.terrainIds.includes(id)))throw new Error('Remove this terrain from its tileset collections before deleting it.');
   const dependents=workspace.tilemaps.filter(m=>mapAssetIds(m).has(id));
   if(dependents.length)throw new Error(`This asset is used by ${dependents.length} tilemap(s). Remove those maps before deleting the asset.`);
   showDialog('Remove from your collection?',`“${asset.name}” will be deleted from this browser.`,`<p class="section-copy">This removes the saved asset and cannot be undone. You can export your workspace in Settings first.</p>`,'Delete asset',()=>{
@@ -662,14 +758,14 @@ $('#image-file').addEventListener('change',async e=>{
   try {
     const image=await readImage(file),name=file.name.replace(/\.[^.]+$/,'');
     if(importMode==='atlas'){
-      showDialog('Bring in your tileset',`${image.width} × ${image.height} pixels · Set the size of each tile.`,`${nameField(name)}${sizeFields(settings().tile.isometric?settings().tile.size*2:settings().tile.size,settings().tile.size)}<label class="field-label">Spacing between tiles<input name="gap" type="number" min="0" max="8" value="0" required/></label><p class="field-note">Use the tile width and height above. Atlas dimensions must fit whole tiles, with spacing between them and no outer padding. Imported masks are unknown; the atlas JSON exports their positions.</p>`,'Import tileset',data=>{
-        if(workspace.tilesets.length>=100)throw new Error('Your workspace holds up to 100 tilesets.');
+      showDialog('Bring in your tile atlas',`${image.width} × ${image.height} pixels · Set the size of each tile.`,`${nameField(name)}${sizeFields(settings().tile.isometric?settings().tile.size*2:settings().tile.size,settings().tile.size)}<label class="field-label">Spacing between tiles<input name="gap" type="number" min="0" max="8" value="0" required/></label><p class="field-note">Use the tile width and height above. Atlas dimensions must fit whole tiles, with spacing between them and no outer padding. Imported masks are unknown; the atlas JSON exports their positions.</p>`,'Import tile atlas',data=>{
+        if(workspace.tilesets.length>=100)throw new Error('Your workspace holds up to 100 auto terrains and tile atlases.');
         checkCapacity(image.width*image.height);
         const tw=Number(data.get('width')),th=Number(data.get('height')),gap=Number(data.get('gap'));
         const columns=(image.width+gap)/(tw+gap),rows=(image.height+gap)/(th+gap);
         if(!Number.isInteger(columns)||!Number.isInteger(rows)||columns<1||rows<1||columns*rows>4096)throw new Error('The image must contain whole tiles (up to 4096 tiles). Check tile dimensions and spacing.');
         const t={...image,tileWidth:tw,tileHeight:th,columns,rows,gap,masks:Array(columns*rows).fill(null),imported:true,options:{...settings().tile},id:uid(),kind:'tileset',name:data.get('name').trim()||name,updatedAt:Date.now()};
-        workspace.tilesets.push(t);state.view='tiles';state.tile=t;state.selectedTile=0;changed();closeDialog();render();fitCanvas();toast('Tileset imported and saved to your library.');
+        workspace.tilesets.push(t);state.view='tiles';state.tile=t;state.selectedTile=0;changed();closeDialog();render();fitCanvas();toast('Tile atlas imported and saved to your library.');
       });return;
     }
     const add=(width,height,asLayer)=>{
@@ -691,17 +787,18 @@ $('#json-file').addEventListener('change',async e=>{
   try {
     if(file.size>512*1024*1024)throw new Error('Please choose a backup under 512 MB.');
     const imported=parseWorkspace(JSON.parse(await file.text()));
-    showDialog('Welcome back, pixels.',`This backup contains ${imported.sprites.length} sprites, ${imported.tilesets.length} tilesets, and ${imported.tilemaps.length} tilemaps.`,`<label class="field-label">How would you like to restore?<select name="mode"><option value="merge">Merge into this workspace</option><option value="replace">Replace this workspace</option></select></label><div class="note-card">Merge adds a copy of every asset and combines custom colors, keeping your current settings. Replace loads the backup’s assets and settings and removes the current collection. Export a backup first if you want to keep it.</div>`,'Restore backup',async data=>{
+    showDialog('Welcome back, pixels.',`This backup contains ${imported.sprites.length} sprites, ${imported.tilesets.length} auto terrains, ${imported.collections.length} tileset collections, and ${imported.tilemaps.length} tilemaps.`,`<label class="field-label">How would you like to restore?<select name="mode"><option value="merge">Merge into this workspace</option><option value="replace">Replace this workspace</option></select></label><div class="note-card">Merge adds a copy of every asset and combines custom colors, keeping your current settings. Replace loads the backup’s assets and settings and removes the current collection. Export a backup first if you want to keep it.</div>`,'Restore backup',async data=>{
       if(data.get('mode')==='replace')workspace=imported;
       else{
-        if(workspace.sprites.length+imported.sprites.length>100||workspace.tilesets.length+imported.tilesets.length>100||workspace.tilemaps.length+imported.tilemaps.length>100)throw new Error('Merged workspaces can have up to 100 assets of each type.');
+        if(workspace.sprites.length+imported.sprites.length>100||workspace.tilesets.length+imported.tilesets.length>100||workspace.tilemaps.length+imported.tilemaps.length>100||workspace.collections.length+imported.collections.length>100)throw new Error('Merged workspaces can have up to 100 assets of each type.');
         checkCapacity(workspacePixelCount(imported));
         if(workspace.palettes.saved.length+imported.palettes.saved.length>MAX_PALETTES)throw new Error('Merging would exceed 32 named palettes.');
         const map=new Map();for(const s of imported.sprites){map.set(s.id,uid());s.id=map.get(s.id);const old=s.activeLayerId;for(const l of s.layers){const prev=l.id;l.id=uid();if(prev===old)s.activeLayerId=l.id;}}
         for(const t of imported.tilesets){const old=t.id;t.id=uid();map.set(old,t.id);for(const key of ['terrainA','terrainB','borderTexture'])t.options[key]=map.get(t.options[key])||'';for(const o of Object.values(t.options.overrides||{}))if(o.borderTexture)o.borderTexture=map.get(o.borderTexture)||'';}
-        for(const m of imported.tilemaps){m.id=uid();m.tilesetId=map.get(m.tilesetId)||null;for(const source of m.sources||[])source.assetId=map.get(source.assetId);const active=m.activeLayerId;for(const l of m.layers){const old=l.id;l.id=uid();if(old===active)m.activeLayerId=l.id;}}
+        for(const c of imported.collections){c.id=uid();c.terrainIds=c.terrainIds.map(id=>map.get(id));}
+        for(const m of imported.tilemaps){for(const p of m.patterns||[]){p.id=uid();for(const tile of p.tiles)tile.assetId=map.get(tile.assetId);}m.id=uid();m.tilesetId=map.get(m.tilesetId)||null;for(const source of m.sources||[])source.assetId=map.get(source.assetId);const active=m.activeLayerId;for(const l of m.layers){const old=l.id;l.id=uid();if(old===active)m.activeLayerId=l.id;}}
         workspace.palettes.saved.push(...imported.palettes.saved.map(p=>({...p,id:uid()})));
-        workspace.sprites.push(...imported.sprites);workspace.tilesets.push(...imported.tilesets);workspace.tilemaps.push(...imported.tilemaps);workspace.palettes.custom=[...new Set([...workspace.palettes.custom,...imported.palettes.custom])].slice(0,128);
+        workspace.collections.push(...imported.collections);workspace.sprites.push(...imported.sprites);workspace.tilesets.push(...imported.tilesets);workspace.tilemaps.push(...imported.tilemaps);workspace.palettes.custom=[...new Set([...workspace.palettes.custom,...imported.palettes.custom])].slice(0,128);
       }
       state.history.clear();state.tabViews.clear();state.tile=null;state.mapId=null;state.selection=null;hydrateSession();changed();await persist();closeDialog();render();if(state.view!=='library')fitCanvas();toast('Your workspace is restored.');
     });
@@ -720,6 +817,10 @@ document.addEventListener('click',async e=>{
       case 'close-tab':closeTab(el.dataset.id);break;
       case 'new-document':newDocumentDialog();break;
       case 'new-tileset':newTileset();break;
+      case 'new-collection':collectionDialog();break;
+      case 'edit-collection':collectionDialog(el.dataset.id);break;
+      case 'export-collection':await exportCollection(workspace.collections.find(c=>c.id===el.dataset.id));break;
+      case 'delete-collection':deleteCollection(el.dataset.id);break;
       case 'new-map':newMapDialog();break;
       case 'tiles-to-map':newMapDialog(state.tile.id);break;
       case 'library-filter':state.libraryFilter=el.dataset.kind;renderLibraryPage();break;
@@ -730,7 +831,8 @@ document.addEventListener('click',async e=>{
       case 'rotate-selection-right':transformSelectedRegion(90);break;
       case 'flip-selection-x':transformSelectedRegion(0,true);break;
       case 'flip-selection-y':transformSelectedRegion(0,false,true);break;
-      case 'godot-export':await exportGodot();break;
+      case 'border-strip-preset':changeTile({borderMapping:'native',borderAlign:'center',borderScale:1,borderReverse:false,borderTrim:false,borderOffset:0,borderRepeat:0,borderPhase:0,borderRotation:0,border:settings().tile.size},el.dataset.selected==='true');break;
+      case 'godot-export':collectionDialog(null,true);break;
       case 'rotate-tile':transformSelectedTile(90);break;
       case 'flip-tile-x':transformSelectedTile(0,true);break;
       case 'flip-tile-y':transformSelectedTile(0,false,true);break;
@@ -740,7 +842,10 @@ document.addEventListener('click',async e=>{
       case 'clear-animation':checkpoint();delete state.tile.animations[state.selectedTile];changed();renderRight();break;
       case 'play-animation':state.animationPlaying=!state.animationPlaying;renderRight();updateCanvas();break;
       case 'map-tool':state.mapTool=el.dataset.tool;renderLeft();positionCanvas();break;
-      case 'map-tile':state.mapTile=state.mapSourceId==='textures'?el.dataset.index:Number(el.dataset.index);if(state.mapTool==='picker'||state.mapTool==='erase'||state.mapTool==='pan')state.mapTool='paint';renderLeft();break;
+      case 'map-tile':state.mapTile=!mapPaletteAtlas()?el.dataset.index:Number(el.dataset.index);if(state.mapTool==='picker'||state.mapTool==='erase'||state.mapTool==='pan')state.mapTool='paint';renderLeft();break;
+      case 'texture-tile':{const index=Number(el.dataset.index),old=state.textureSelection;state.textureSelection={assetId:state.mapTextureId,start:e.shiftKey&&old?.assetId===state.mapTextureId?old.start:index,end:index};state.mapTile='selection';if(['picker','erase','pan'].includes(state.mapTool))state.mapTool='paint';renderLeft();drawOverlay();break;}
+      case 'save-map-pattern':saveMapPattern();break;
+      case 'delete-map-pattern':checkpoint();currentMap().patterns=currentMap().patterns.filter(p=>p.id!==state.mapTile);state.mapTile='selection';changed();renderLeft();break;
       case 'edit-map-tileset':openDocument(mapPaletteAtlas()?.id);break;
       case 'resize-map':resizeMapDialog();break;
       case 'map-select-layer':currentMap().activeLayerId=el.dataset.id;changed();renderRight();break;
@@ -822,6 +927,7 @@ let opacityEditing=false;
 document.addEventListener('pointerdown',e=>{if(e.target.id==='opacity'){checkpoint();opacityEditing=true;}});
 document.addEventListener('change',e=>{try{
   const el=e.target,id=el.id;
+  if(el.dataset.borderOption){if(!el.checkValidity())throw new Error('Enter a value within the displayed range.');const key=el.dataset.borderOption;changeTile({[key]:el.type==='checkbox'?el.checked:el.type==='number'||['borderScale','borderRotation'].includes(key)?Number(el.value):el.value},el.dataset.borderSelected==='true');return;}
   if(id==='theme-setting'){settings().theme=el.value;applyTheme();changed();}
   if(el.matches('.palette-color-picker'))el.closest('.palette-color-row').querySelector('[name="palette-color"]').value=el.value;
   if(el.name==='palette-color'&&/^#[0-9a-f]{6}$/i.test(el.value))el.closest('.palette-color-row').querySelector('.palette-color-picker').value=el.value;
@@ -841,6 +947,9 @@ document.addEventListener('change',e=>{try{
     if(el.type==='number'&&!el.checkValidity())throw new Error('Enter a value within the displayed range.');
     const key=({'selected-border-type':'borderType','selected-border-texture':'borderTexture','selected-border':'border','selected-cutoff':'cutoff'})[id];changeTile({[key]:['border','cutoff'].includes(key)?Number(el.value):el.value},true);
   }
+  if(id==='new-map-terrain'){const atlas=workspace.tilesets.find(t=>t.id===el.value);if(atlas){$('[name="cell-width"]').value=atlas.tileWidth;$('[name="cell-height"]').value=atlas.tileHeight;}}
+  if(id==='map-texture'){state.mapTextureId=el.value;state.textureSelection=null;state.mapTile='selection';renderLeft();drawOverlay();}
+  if(id==='map-collection'){state.mapCollectionId=el.value;state.mapSourceId=workspace.collections.find(c=>c.id===el.value)?.terrainIds[0]||'textures';state.mapTile=3;renderLeft();}
   if(id==='map-tileset'){
     state.mapSourceId=el.value;state.mapTile=3;renderLeft();
   }

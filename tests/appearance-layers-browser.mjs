@@ -38,14 +38,14 @@ try{
   await action('add-layer');const mergedPixel=await page.locator('.layer-row.active').getAttribute('data-layer');await action('merge-down',mergedPixel);assert.equal(await page.locator('.layer-row').count(),1);
   await action('open-tab',map.id);await rename(ground.id,'Renamed ground');assert.match(await page.locator('.layer-row.active').innerText(),/Details/);
   await action('map-layer-up',ground.id);assert.match(await page.locator('.layer-row').first().innerText(),/Renamed ground/);
-  await action('map-layer-down',ground.id);const activeMapLayer=await page.locator('.layer-row.active .layer-pick').getAttribute('data-id');await page.selectOption('#map-tileset','textures');await page.click(`[data-action="map-tile"][data-index="${large.id}"]`);
+  await action('map-layer-down',ground.id);const activeMapLayer=await page.locator('.layer-row.active .layer-pick').getAttribute('data-id');await page.selectOption('#map-tileset','textures');await page.selectOption('#map-texture',large.id);await page.click('[data-action="texture-tile"][data-index="0"]');await page.locator('[data-action="texture-tile"]').last().click({modifiers:['Shift']});
   const box=await page.locator('#art-canvas').boundingBox();await page.mouse.move(box.x+box.width*.6,box.y+box.height*.55);
   assert.ok(await page.locator('#selection-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data).some(v=>v)),'large-texture hover preview is visible');
-  await page.mouse.click(box.x+box.width*.6,box.y+box.height*.55);await saved();let current=await workspace();assert.equal(current.tilemaps[0].layers.reduce((n,l)=>n+(l.decals?.length||0),0),1);
-  await action('map-merge-down',activeMapLayer);assert.equal(await page.locator('.layer-row').count(),1);await saved();current=await workspace();assert.equal(current.tilemaps[0].layers[0].decals.length,1);
+  await page.mouse.click(box.x+box.width*.6,box.y+box.height*.55);await saved();let current=await workspace();assert.ok(current.tilemaps[0].layers.some(l=>l.terrain?.includes(7)));assert.equal(current.tilemaps[0].layers.reduce((n,l)=>n+(l.decals?.length||0),0),0);
+  await action('map-merge-down',activeMapLayer);assert.equal(await page.locator('.layer-row').count(),1);await saved();current=await workspace();assert.ok(current.tilemaps[0].layers[0].terrain.includes(7));
   await action('settings');await page.selectOption('#theme-setting','system');await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await theme(),'dark');await page.keyboard.press('Escape');
   await page.screenshot({path:'.screenshots/dark-map-layers.png',fullPage:true,animations:'disabled'});
   assert.equal(await page.locator('[data-action="map-delete-layer"]').isDisabled(),true);
   await saved();await page.reload();await page.locator('.library-page').waitFor();await action('settings');assert.equal(await page.locator('#theme-setting').inputValue(),'system');
-  assert.deepEqual(errors,[]);console.log('Appearance and layer controls passed: system theme changes, saved overrides, large-texture hover placement, and per-row merge controls in both editors.');
+  assert.deepEqual(errors,[]);console.log('Appearance and layer controls passed: system theme changes, saved overrides, texture-pattern hover placement, and per-row merge controls in both editors.');
 }finally{await browser.close();}

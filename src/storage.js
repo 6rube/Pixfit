@@ -7,7 +7,7 @@ export const MAX_WORKSPACE_PIXELS = 32_000_000;
 export function workspacePixelCount(workspace) {
   return workspace.sprites.reduce((n, s) => n + s.width * s.height * s.layers.length, 0)
     + workspace.tilesets.reduce((n, t) => n + t.width * t.height, 0)
-    + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length+m.layers.reduce((n,l)=>n+(l.terrain?.length||0)+(l.sources?.length||0),0)+(m.textures||[]).reduce((n,t)=>n+t.width*t.height,0),0);
+    + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length+m.layers.reduce((n,l)=>n+(l.terrain?.length||0)+(l.sources?.length||0),0)+(m.textures||[]).reduce((n,t)=>n+t.width*t.height,0)+(m.patterns||[]).reduce((n,p)=>n+p.tiles.length,0),0);
 }
 export const DEFAULT_SETTINGS = { theme: 'system', color: '#738b51', secondaryColor: '#f3dfb0', brushSize: 1, mirrorX: false, mirrorY: false, dither: false, grid: false, palette: 'woodland', pasteNewLayer: true, tile: { size: 16, columns: 8, mode: 'wang', border: 1, borderType:'dither', borderTexture:'', cutoff:0, slopes1:false, slopes2:false, overrides:{}, isometric: false, gap: false, terrainA: '', terrainB: '' } };
 const validColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
@@ -17,6 +17,7 @@ export function serializeWorkspace(workspace) {
     activeId: workspace.activeId, settings: workspace.settings, palettes: workspace.palettes,
     sprites: workspace.sprites.map(sprite => ({ ...sprite, layers: sprite.layers.map(layer => ({ ...layer, pixels: encodePixels(layer.pixels) })) })),
     tilesets: workspace.tilesets.map(tile => ({ ...tile, pixels: encodePixels(tile.pixels) })),
+    collections: structuredClone(workspace.collections||[]),
     tilemaps: (workspace.tilemaps||[]).map(m=>({...m,layers:m.layers.map(l=>({...l,cells:encodePixels(l.cells),...(l.terrain?{terrain:encodePixels(l.terrain)}:{}),...(l.sources?{sources:encodePixels(l.sources)}:{})}))})),
     session: workspace.session || {tabs:[workspace.activeId],activeTab:workspace.activeId,view:'pixel'},
   };
@@ -62,6 +63,11 @@ export function parseWorkspace(data) {
     }
     return atlas;
   });
+  if(data.collections!==undefined&&(!Array.isArray(data.collections)||data.collections.length>100))throw new Error('Invalid tileset collections.');
+  const collections=(data.collections||[]).map(c=>{
+    if(!Array.isArray(c.terrainIds)||!c.terrainIds.length||c.terrainIds.length>100||new Set(c.terrainIds).size!==c.terrainIds.length||c.terrainIds.some(id=>!tilesets.some(t=>t.id===id)))throw new Error('Invalid tileset terrain references.');
+    return {id:id(c.id),name:name(c.name),terrainIds:[...c.terrainIds]};
+  });
   const tilemaps=(data.tilemaps||[]).map(m=>{
     const width=size(m.width,256),height=size(m.height,256),cellWidth=size(m.cellWidth,512),cellHeight=size(m.cellHeight,512);
     validateMapSize(width,height,cellWidth,cellHeight);
@@ -98,12 +104,28 @@ export function parseWorkspace(data) {
       if(l.terrain!==undefined)result.terrain=decode(l.terrain,width*height);
       for(let i=0;i<cells.length;i++){
         const index=result.sources?.[i]||0,source=sources?.[index-1],set=index?tilesets.find(t=>source?.kind==='tileset'&&t.id===source.assetId):atlas,type=result.terrain?.[i]||0;
-        if(cells[i]>(set?.masks.length||0))throw new Error('A map contains an invalid tile.');
-        if(type>6||(type===6&&source?.kind!=='texture')||([1,2,3,5].includes(type)&&(!set||set.imported))||([1,2].includes(type)&&!index&&!textures))throw new Error('Invalid terrain brush data.');
+        const texture=source?.kind==='texture'?sprites.find(s=>s.id===source.assetId):null;
+        if(cells[i]>(type===7&&texture?Math.ceil(texture.width/cellWidth)*Math.ceil(texture.height/cellHeight):set?.masks.length||0))throw new Error('A map contains an invalid tile.');
+        if(type>7||([6,7].includes(type)&&source?.kind!=='texture')||(type===7&&!cells[i])||([1,2,3,5].includes(type)&&(!set||set.imported))||([1,2].includes(type)&&!index&&!textures))throw new Error('Invalid terrain brush data.');
       }
       return result;
     });
-    return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas?.id||null,layers,...(sources?{sources}:{}),...(textures?{textures}:{}),activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
+    let patterns;
+    if(m.patterns!==undefined){
+      if(!Array.isArray(m.patterns)||m.patterns.length>100)throw new Error('Invalid map patterns.');
+      patterns=m.patterns.map(p=>{
+        const pw=size(p.width,64),ph=size(p.height,64);
+        if(!Array.isArray(p.tiles)||p.tiles.length!==pw*ph)throw new Error('Invalid pattern dimensions.');
+        pixelBudget+=pw*ph;if(pixelBudget>MAX_WORKSPACE_PIXELS)throw new Error('This backup is too large.');
+        const tiles=p.tiles.map(t=>{
+          const texture=sprites.find(s=>s.id===t.assetId);
+          if(t.kind!=='texture-tile'||!texture||!Number.isInteger(t.value)||t.value<0||t.value>=Math.ceil(texture.width/cellWidth)*Math.ceil(texture.height/cellHeight))throw new Error('Invalid pattern tile.');
+          return {kind:t.kind,assetId:t.assetId,value:t.value};
+        });
+        return {id:id(p.id),name:name(p.name),width:pw,height:ph,tiles};
+      });
+    }
+    return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas?.id||null,layers,...(sources?{sources}:{}),...(textures?{textures}:{}),...(patterns?{patterns}:{}),activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
   });
   const raw = data.settings || {}, settings = { ...DEFAULT_SETTINGS, tile: cleanTile(raw.tile) };
   for (const key of ['color', 'secondaryColor']) if (raw[key] === 'transparent' || validColor(raw[key])) settings[key] = raw[key];
@@ -120,11 +142,19 @@ export function parseWorkspace(data) {
   const tabs=Array.isArray(rawSession.tabs)?[...new Set(rawSession.tabs.filter(id=>assetIds.has(id)))].slice(0,100):[activeId];
   const activeTab=tabs.includes(rawSession.activeTab)?rawSession.activeTab:tabs[0]||activeId;
   const session={tabs,activeTab,view:['pixel','tiles','map','library'].includes(rawSession.view)?rawSession.view:'pixel'};
-  return { sprites, tilesets, tilemaps, session, settings, palettes, activeId };
+  return { sprites, tilesets, collections, tilemaps, session, settings, palettes, activeId };
 }
 export function cleanTile(raw = {}) {
   const identifier=value=>typeof value==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(value)?value:'';
   const numeric=(value,min,max,fallback)=>Number.isFinite(value)?Math.max(min,Math.min(max,Math.round(value))):fallback;
+  const borderFields=value=>({
+    borderMapping:value.borderMapping==='native'?'native':'fit',
+    borderAlign:['center','inner','outer'].includes(value.borderAlign)?value.borderAlign:'center',
+    borderScale:[.5,1,2,4].includes(value.borderScale)?value.borderScale:1,
+    borderOffset:numeric(value.borderOffset,-64,64,0),borderRepeat:numeric(value.borderRepeat,0,512,0),borderPhase:numeric(value.borderPhase,-512,512,0),
+    borderRotation:[0,90,180,270].includes(value.borderRotation)?value.borderRotation:0,
+    borderTrim:!!value.borderTrim,borderReverse:!!value.borderReverse,
+  });
   const overrides={};
   if(raw?.overrides&&typeof raw.overrides==='object')for(const [key,value] of Object.entries(raw.overrides).slice(0,4096)){
     if(!/^\d{1,4}$/.test(key)||Number(key)>4095||!value||typeof value!=='object')continue;
@@ -133,6 +163,7 @@ export function cleanTile(raw = {}) {
     if(value.borderTexture!==undefined)item.borderTexture=identifier(value.borderTexture);
     if(value.border!==undefined)item.border=numeric(value.border,0,64,1);
     if(value.cutoff!==undefined)item.cutoff=numeric(value.cutoff,-64,64,0);
+    for(const [key,cleaned] of Object.entries(borderFields(value)))if(value[key]!==undefined)item[key]=cleaned;
     overrides[key]=item;
   }
   return {
@@ -140,6 +171,7 @@ export function cleanTile(raw = {}) {
     columns: [4, 8, 16].includes(raw?.columns) ? raw.columns : 8,
     mode: raw?.mode === 'blob' ? 'blob' : 'wang', border: numeric(raw?.border,0,64,1),
     borderType:['none','dither','texture'].includes(raw?.borderType)?raw.borderType:'dither',borderTexture:identifier(raw?.borderTexture),cutoff:numeric(raw?.cutoff,-64,64,0),
+    ...borderFields(raw||{}),
     slopes1:!!raw?.slopes1,slopes2:!!raw?.slopes2,overrides,
     isometric: !!raw?.isometric, gap: !!raw?.gap,
     terrainA: identifier(raw?.terrainA), terrainB: identifier(raw?.terrainB),

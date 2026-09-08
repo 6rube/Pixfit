@@ -61,6 +61,19 @@ function sourceSampler(sprite, fallback) {
   const pixels=sprite?composite(sprite):null;
   return (x,y)=>pixels?pixels[(y%sprite.height)*sprite.width+x%sprite.width]:fallback;
 }
+// Border images are strips: columns run along an edge, rows across it.
+// Trim only empty rows so horizontal spacing in a repeating motif is retained.
+export function borderTextureImage(sprite,options={}) {
+  if(!sprite)return null;
+  let image={width:sprite.width,height:sprite.height,pixels:composite(sprite)};
+  if(options.borderRotation)image=transformImage(image,options.borderRotation);
+  if(options.borderTrim){
+    let top=image.height,bottom=-1;
+    for(let y=0;y<image.height;y++)for(let x=0;x<image.width;x++)if(image.pixels[y*image.width+x]&255){top=Math.min(top,y);bottom=Math.max(bottom,y);}
+    image=bottom<top?{width:image.width,height:1,pixels:new Uint32Array(image.width)}:{width:image.width,height:bottom-top+1,pixels:image.pixels.slice(top*image.width,(bottom+1)*image.width)};
+  }
+  return image;
+}
 export function buildTileset(terrainA, terrainB, options={}, sprites=[]) {
   const size=clamp(Number(options.size)||16,8,64), columns=clamp(Number(options.columns)||8,4,16),gap=options.gap?1:0;
   const tileWidth=options.isometric?size*2:size,tileHeight=size;
@@ -70,11 +83,20 @@ export function buildTileset(terrainA, terrainB, options={}, sprites=[]) {
     if(enabled)for(let orientation=0;orientation<4;orientation++)specs.push({mask:null,kind,baseWidth:size,baseHeight:height,orientation});
   }
   const sampleA=sourceSampler(terrainA,hexToColor('#91aa66')),sampleB=sourceSampler(terrainB,0);
+  const borderImages=new Map();
   const patches=specs.map((spec,id)=>{
     const override=options.overrides?.[id]||{}, opts={...options,...override};
     const borderType=override.borderType&&override.borderType!=='inherit'?override.borderType:(options.borderType||'dither');
-    const borderTexture=sprites.find(s=>s.id===(override.borderTexture||options.borderTexture)),sampleBorder=sourceSampler(borderTexture,0);
+    const borderTexture=sprites.find(s=>s.id===(override.borderTexture||options.borderTexture));
+    const borderKey=`${borderTexture?.id}:${opts.borderRotation||0}:${!!opts.borderTrim}`;
+    if(borderType==='texture'&&borderTexture&&!borderImages.has(borderKey))borderImages.set(borderKey,borderTextureImage(borderTexture,opts));
+    const borderImage=borderImages.get(borderKey);
     const borderWidth=clamp(Number(opts.border)||0,0,size),cutoff=clamp(Number(opts.cutoff)||0,-size,size);
+    const scale=[.5,1,2,4].includes(opts.borderScale)?opts.borderScale:1;
+    const band=opts.borderMapping==='native'&&borderImage?borderImage.height*scale:borderWidth;
+    const start=(opts.borderAlign==='inner'?0:opts.borderAlign==='outer'?-band:-band/2)+clamp(Number(opts.borderOffset)||0,-64,64);
+    const repeat=clamp(Number(opts.borderRepeat)||0,0,512)||(borderImage?.width||1)*scale;
+    const phase=clamp(Number(opts.borderPhase)||0,-512,512);
     const width=spec.baseWidth,height=spec.baseHeight,pixels=new Uint32Array(width*height);
     // A signed distance in pixels makes both border width and cutoff independent of tile resolution.
     for(let y=0;y<height;y++)for(let x=0;x<width;x++) {
@@ -98,12 +120,14 @@ export function buildTileset(terrainA, terrainB, options={}, sprites=[]) {
       let useA=distance>=0;
       if(mixed&&borderType==='dither')useA=distance/borderWidth+.5>[.125,.625,.875,.375][(y%2)*2+x%2];
       let color=useA?sampleA(x,y):sampleB(x,y);
-      if(mixed&&borderType==='texture'&&borderTexture){
-        // Repeat the strip along the edge; fit its entire height across the band.
-        // Source rows run from outer terrain (top) to inner terrain (bottom).
+      if(borderType==='texture'&&borderImage&&band>0&&distance>start&&distance<start+band){
+        // Native mode preserves padding and row spacing instead of squeezing
+        // a full texture into a narrow band. Transparent pixels reveal terrain.
         const along=Math.abs(normalX)>Math.abs(normalY)?y:x;
-        const across=clamp(Math.floor((distance/borderWidth+.5)*borderTexture.height),0,borderTexture.height-1);
-        color=blendPixel(color,sampleBorder(along,across));
+        const sx=((Math.floor((along+phase)*borderImage.width/repeat)%borderImage.width)+borderImage.width)%borderImage.width;
+        let sy=clamp(Math.floor((distance-start)/band*borderImage.height),0,borderImage.height-1);
+        if(opts.borderReverse)sy=borderImage.height-1-sy;
+        color=blendPixel(color,borderImage.pixels[sy*borderImage.width+sx]);
       }
       pixels[y*width+x]=color;
     }
