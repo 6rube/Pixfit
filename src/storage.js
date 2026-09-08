@@ -7,9 +7,9 @@ export const MAX_WORKSPACE_PIXELS = 32_000_000;
 export function workspacePixelCount(workspace) {
   return workspace.sprites.reduce((n, s) => n + s.width * s.height * s.layers.length, 0)
     + workspace.tilesets.reduce((n, t) => n + t.width * t.height, 0)
-    + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length+m.layers.reduce((n,l)=>n+(l.terrain?.length||0),0)+(m.textures||[]).reduce((n,t)=>n+t.width*t.height,0),0);
+    + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length+m.layers.reduce((n,l)=>n+(l.terrain?.length||0)+(l.sources?.length||0),0)+(m.textures||[]).reduce((n,t)=>n+t.width*t.height,0),0);
 }
-export const DEFAULT_SETTINGS = { color: '#738b51', secondaryColor: '#f3dfb0', brushSize: 1, mirrorX: false, mirrorY: false, dither: false, grid: false, palette: 'woodland', pasteNewLayer: true, tile: { size: 16, columns: 8, mode: 'wang', border: 1, borderType:'dither', borderTexture:'', cutoff:0, slopes1:false, slopes2:false, overrides:{}, isometric: false, gap: false, terrainA: '', terrainB: '' } };
+export const DEFAULT_SETTINGS = { theme: 'system', color: '#738b51', secondaryColor: '#f3dfb0', brushSize: 1, mirrorX: false, mirrorY: false, dither: false, grid: false, palette: 'woodland', pasteNewLayer: true, tile: { size: 16, columns: 8, mode: 'wang', border: 1, borderType:'dither', borderTexture:'', cutoff:0, slopes1:false, slopes2:false, overrides:{}, isometric: false, gap: false, terrainA: '', terrainB: '' } };
 const validColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 export function serializeWorkspace(workspace) {
   return {
@@ -17,7 +17,7 @@ export function serializeWorkspace(workspace) {
     activeId: workspace.activeId, settings: workspace.settings, palettes: workspace.palettes,
     sprites: workspace.sprites.map(sprite => ({ ...sprite, layers: sprite.layers.map(layer => ({ ...layer, pixels: encodePixels(layer.pixels) })) })),
     tilesets: workspace.tilesets.map(tile => ({ ...tile, pixels: encodePixels(tile.pixels) })),
-    tilemaps: (workspace.tilemaps||[]).map(m=>({...m,layers:m.layers.map(l=>({...l,cells:encodePixels(l.cells),...(l.terrain?{terrain:encodePixels(l.terrain)}:{})}))})),
+    tilemaps: (workspace.tilemaps||[]).map(m=>({...m,layers:m.layers.map(l=>({...l,cells:encodePixels(l.cells),...(l.terrain?{terrain:encodePixels(l.terrain)}:{}),...(l.sources?{sources:encodePixels(l.sources)}:{})}))})),
     session: workspace.session || {tabs:[workspace.activeId],activeTab:workspace.activeId,view:'pixel'},
   };
 }
@@ -65,7 +65,15 @@ export function parseWorkspace(data) {
   const tilemaps=(data.tilemaps||[]).map(m=>{
     const width=size(m.width,256),height=size(m.height,256),cellWidth=size(m.cellWidth,512),cellHeight=size(m.cellHeight,512);
     validateMapSize(width,height,cellWidth,cellHeight);
-    const atlas=tilesets.find(t=>t.id===m.tilesetId);if(!atlas)throw new Error('A tilemap references a missing tileset.');
+    const atlas=tilesets.find(t=>t.id===m.tilesetId);if(!atlas&&m.tilesetId!==null)throw new Error('A tilemap references a missing tileset.');
+    let sources;
+    if(m.sources!==undefined){
+      if(!Array.isArray(m.sources)||m.sources.length>200)throw new Error('Invalid map sources.');
+      sources=m.sources.map(s=>{
+        if(!s||!['texture','tileset'].includes(s.kind)||!(s.kind==='texture'?sprites:tilesets).some(a=>a.id===s.assetId))throw new Error('A map references a missing source.');
+        return {kind:s.kind,assetId:s.assetId};
+      });
+    }
     if(!Array.isArray(m.layers)||!m.layers.length||m.layers.length>16)throw new Error('Invalid map layer count.');
     let textures;
     if(m.textures!==undefined){
@@ -77,8 +85,18 @@ export function parseWorkspace(data) {
         return {name:name(t.name),width,height,pixels:[...t.pixels]};
       });
     }
-    const layers=m.layers.map(l=>{const cells=decode(l.cells,width*height);if(cells.some(c=>c>atlas.masks.length))throw new Error('A map contains an invalid tile.');const result={id:id(l.id),name:name(l.name),visible:l.visible!==false,opacity:Number.isFinite(l.opacity)?Math.max(0,Math.min(100,l.opacity)):100,cells};if(l.terrain!==undefined){result.terrain=decode(l.terrain,width*height);if(result.terrain.some(v=>v>5)||(!textures&&result.terrain.some(v=>v===1||v===2)))throw new Error('Invalid terrain brush data.');}return result;});
-    return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas.id,layers,...(textures?{textures}:{}),activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
+    const layers=m.layers.map(l=>{
+      const cells=decode(l.cells,width*height),result={id:id(l.id),name:name(l.name),visible:l.visible!==false,opacity:Number.isFinite(l.opacity)?Math.max(0,Math.min(100,l.opacity)):100,cells};
+      if(l.sources!==undefined){result.sources=decode(l.sources,width*height);if(result.sources.some(v=>v>(sources?.length||0)))throw new Error('Invalid map source index.');}
+      if(l.terrain!==undefined)result.terrain=decode(l.terrain,width*height);
+      for(let i=0;i<cells.length;i++){
+        const index=result.sources?.[i]||0,source=sources?.[index-1],set=index?tilesets.find(t=>source?.kind==='tileset'&&t.id===source.assetId):atlas,type=result.terrain?.[i]||0;
+        if(cells[i]>(set?.masks.length||0))throw new Error('A map contains an invalid tile.');
+        if(type>6||(type===6&&source?.kind!=='texture')||([1,2,3,5].includes(type)&&(!set||set.imported))||([1,2].includes(type)&&!index&&!textures))throw new Error('Invalid terrain brush data.');
+      }
+      return result;
+    });
+    return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas?.id||null,layers,...(sources?{sources}:{}),...(textures?{textures}:{}),activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
   });
   const raw = data.settings || {}, settings = { ...DEFAULT_SETTINGS, tile: cleanTile(raw.tile) };
   for (const key of ['color', 'secondaryColor']) if (validColor(raw[key])) settings[key] = raw[key];
@@ -87,6 +105,7 @@ export function parseWorkspace(data) {
   settings.palette = ['woodland', 'pastel', 'classic', 'custom'].includes(raw.palette) ? raw.palette : 'woodland';
   settings.pasteNewLayer=raw.pasteNewLayer!==false;
   settings.mapGrid=raw.mapGrid!==false;
+  settings.theme=['system','light','dark'].includes(raw.theme)?raw.theme:'system';
   const palettes = { custom: Array.isArray(data.palettes?.custom) ? data.palettes.custom.filter(validColor).slice(0, 128) : [], saved:savedPalettes(data.palettes?.saved) };
   if(palettes.saved.some(p=>p.id===raw.palette))settings.palette=raw.palette;
   const activeId=sprites.some(s=>s.id===data.activeId)?data.activeId:sprites[0].id;

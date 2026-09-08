@@ -1,0 +1,37 @@
+/* Keep each layer's controls together without squeezing its name. */
+.layer-row{flex-wrap:wrap;gap:5px}
+.layer-row>.layer-pick{flex-basis:100%}
+.layer-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:3px;width:100%}
+.layer-row-actions .icon-button{width:26px;height:26px;color:var(--accent-dark)}
+.layer-row-actions .icon{width:14px;height:14px}
+
+:root{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark;--ink:#e0e6da;--muted:#adb6a5;--line:#394234;--accent:#b6cf85;--accent-dark:#b6cf85;--panel:#242a22;background:#1c211b;color:var(--ink)}
+:root[data-theme=dark] :is(.workspace-bar,.canvas-toolbar,.canvas-footer,.app-footer,.document-tabs){background:#20251f;border-color:var(--line)}
+:root[data-theme=dark] :is(.library-page,.stage){background-color:#1c211b}
+:root[data-theme=dark] .stage{background-image:radial-gradient(#3e4838 .65px,transparent .65px)}
+:root[data-theme=dark] .stage:before{background:none}
+:root[data-theme=dark] :is(.document-tab.active,.zoom-controls,.library-card,#dialog){background:var(--panel);color:var(--ink);border-color:var(--line);box-shadow:none}
+:root[data-theme=dark] #dialog{box-shadow:0 22px 100px #0006}
+:root[data-theme=dark] #dialog::backdrop{background:#0009}
+:root[data-theme=dark] :is(input[type=text],input[type=number],input[type=search],input:not([type]),select,.dialog-content input,.dialog-content select,#library-search,.button.outlined,.tool-button,.map-tools>button,.library-creation>button){background:#2b3228;color:var(--ink);border-color:#48513f}
+:root[data-theme=dark] :is(.button.outlined:hover,.tool-button:hover,.icon-button:hover:not(:disabled),.button.quiet:hover,.library-creation>button:hover,.library-filters>button:hover,.layer-row:hover:not(.active),.workspace-nav>button:hover:not(.active)){background:#38432f;border-color:#65774e}
+:root[data-theme=dark] :is(.tool-button.active,.map-tools>button.active,.layer-row.active,.segmented>button.active,.brush-sizes button.active,.header-actions>.button.active,.library-filters>button.active,.workspace-nav>button.active,.tile-transforms>.button.active,button[aria-pressed=true].icon-button){background:#3b4b2d;color:#d5e8b5;border-color:#718953;box-shadow:none}
+:root[data-theme=dark] :is(.current-color,.brush-sizes button,.note-card,.storage-card,.tiles-promo,.library-empty,.connection-guide,.dimensions,.file-badge,.library-filters>button>span,.library-creation>button>.icon:first-child){background:#2b3526;border-color:var(--line);color:#bdcdaa}
+:root[data-theme=dark] :is(.section-title h2,.dialog-heading h2,.library-page-heading h1,.library-open>strong,.library-creation strong,.storage-card strong,.settings-action h3,.tiles-promo h3,.layer-name,.document-title,.breadcrumbs>button,.range-row output,.spec-list dd,.library-empty h2){color:var(--ink)}
+:root[data-theme=dark] :is(.field-label,.source-label,.section-copy,.field-note,.tool-description,.preview-meta,.layer-name>small,.dialog-heading p,.storage-card p,.settings-action p,.library-page-heading p,.library-creation small,.library-open>span:last-child,.library-empty p,.subtle,.breadcrumbs,.app-footer,.footer-link,.canvas-footer,.stage-caption,.stage-bottom,.canvas-tip,.range-row,.toggle-row,.checkbox-row,.text-link,.text-button,.library-filters>button,.document-tab,.key-hint,.tool-button>kbd,.current-color>div>span,.empty-palette,.left-bottom>p,.spec-list,.connection-guide>p,.tile-stepper,.brand .version,#save-status){color:var(--muted)}
+:root[data-theme=dark] :is(.panel-section,.dialog-actions,.settings-action,.library-card-actions,.layer-thumb,.key-hint,.brand .version,.segmented>button,.map-tile-palette>button,.palette-color-row,.navigator,.document-tab,.export-preview){border-color:var(--line)}
+:root[data-theme=dark] .button.accent{background:var(--accent);color:#25311d;border-color:#a8c276}
+:root[data-theme=dark] .button.accent:hover{background:#c6dda0}
+:root[data-theme=dark] .button.dark{background:#b6cf85;color:#25311d}
+:root[data-theme=dark] .button.dark:hover{background:#c6dda0}
+:root[data-theme=dark] .live-badge{background:#36462a;color:#ccdfa9;border-color:#566d3d}
+:root[data-theme=dark] .switch{background:#454e3e;border-color:#59664c}
+:root[data-theme=dark] .switch.on{background:#8da962;border-color:#8da962}
+:root[data-theme=dark] .map-tile-palette>button>span{background:#242a22dd;color:#d2dfc2}
+:root[data-theme=dark] .terrain-brushes>button>span{background:none}
+:root[data-theme=dark] .dialog-error{background:#492a26;color:#ffb9ab}
+:root[data-theme=dark] :is(.checker,#canvas-position){background-color:#30362c;background-image:linear-gradient(45deg,#3e4538 25%,transparent 25%),linear-gradient(-45deg,#3e4538 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#3e4538 75%),linear-gradient(-45deg,transparent 75%,#3e4538 75%)}
+:root[data-theme=dark] #canvas-position{box-shadow:0 3px 14px #0003,0 0 0 1px #526047}
+:root[data-theme=dark] :is(#zoom-label,.tiles-promo p,.tiles-promo>button){color:var(--muted)}
+:root[data-theme=dark] :is(.left-panel,.right-panel){scrollbar-color:#526047 transparent}

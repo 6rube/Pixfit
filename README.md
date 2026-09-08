@@ -84,15 +84,21 @@ The resource format follows Godot's [TileSetAtlasSource API](https://docs.godote
 
 ## Tilemap editor
 
-Create a map from Library, the **+** document menu, or **Use in map** in a tileset. Choose a generated terrain set and dimensions in cells. The palette offers its two source textures and one autotile brush. Paint by clicking or dragging, erase with the eraser or right-click, fill connected areas, draw filled rectangles, and pick a terrain brush with the picker or Ctrl + click. Space + drag pans; scroll zooms.
+Create a map from Library, the **+** document menu, or **Use in map** in a tileset. Choose dimensions in cells and an initial cell size (16 × 16 by default, or the dimensions of a tileset). A map can mix every generated or imported tileset and every sprite texture on the same layer. Use **Brush source** to browse a tileset’s individual tiles and terrain brushes, or **All textures** to paint any library sprite. Switching sources preserves existing artwork and the map’s cell size.
 
-Texture brushes repeat the source artwork at its native pixel size. Blob autotiles choose edges and corners from neighboring terrain; corner autotiles paint junctions shared by four tiles. Painting and erasing update those connections automatically. Texture snapshots and terrain brush choices are saved with the map. Maps have independent layers, visibility/opacity/order, resizing, and undo/redo. Existing manually placed tiles, slopes, and animations remain supported, but are no longer listed as individual palette choices. Imported atlases have no terrain rules; select a generated set to use terrain brushes.
+Paint by clicking or dragging, erase with the eraser or right-click, fill connected areas, draw filled rectangles, and pick a brush and its source with the picker or Ctrl + click. Space + drag pans; scroll zooms. Individual tiles fit the fixed grid using nearest-neighbor scaling; multi-cell tiles retain their spans. Textures repeat at their original pixel size across cells and reflect edits to the source sprite.
 
-Map limits are 256 cells per side, 16 layers, and a rendered image no larger than 4096 pixels per side or 16 million pixels. Changing the source tileset keeps tile numbers; numbers absent from the new source become empty. Regeneration is blocked if removing tiles would invalidate a map that uses them. A tileset referenced by a map must be reassigned or its maps removed before it can be deleted.
+Generated sets also offer their inner/outer texture brushes and connected autoterrain. Blob autotiles choose edges and corners from neighboring terrain of the same set; corner autotiles paint junctions shared by four tiles. Painting and erasing update connections automatically. Imported atlases offer individual tile brushes. Maps retain layers, visibility/opacity/order, resizing, undo/redo, slopes, and animations. Existing maps and their texture snapshots remain supported.
 
-Export a still PNG or a ZIP containing the map's layer/cell JSON, its atlas PNG and metadata, and a rendered PNG. Version 2 map packages also include texture snapshots and per-layer terrain brush data (0: legacy tile, 1/2: source texture, 3: autoterrain, 4: empty, 5: generated corner fringe). Texture cells with no atlas tile render from the corresponding texture snapshot. Map packages are intended for game tooling; use a full workspace backup to restore editable maps in Pixfit.
+Maps support up to **256 × 256 cells**, a rendered size of **4096 × 4096 pixels**, and **16 million rendered pixels**.
+
+Export a still PNG or a ZIP containing the map’s layer/cell JSON, every referenced tileset and texture PNG with metadata, and a rendered PNG. Version 3 map packages include an `assets` list keyed by asset ID and a `sources` list; per-layer `sources` values index that list starting at 1, with 0 referring to the original `tilesetId`. Cell values are local tile indices plus 1 (0 means no tile). Terrain values are 0: manual tile, 1/2: source terrain texture, 3: autoterrain, 4: empty, 5: generated corner fringe, and 6: library texture. Original texture snapshots remain embedded when present. Map packages are intended for game tooling; use a full workspace backup to restore editable maps in Pixfit.
 
 ## Storage and backups
+
+Choose **Settings → Appearance → System default, Light, or Dark**. System default follows your device’s appearance, including changes while Pixfit is open. Your selection is saved with the workspace. The theme changes the editor interface without changing artwork colors.
+
+Layer visibility, move up/down, rename, and delete controls sit together on each layer’s row in the pixel and tilemap editors. Each control acts on its own layer.
 
 Sprites, layers, tilesets, tilemaps, animations, open tabs, palettes, and editor preferences autosave in **IndexedDB** after edits, with **Local Storage** as a fallback. The save indicator reports completion; storage failures display an error and suggest a backup. Changing a source sprite does not alter a tileset until you regenerate it. Editing a tileset updates maps using that tileset.
 

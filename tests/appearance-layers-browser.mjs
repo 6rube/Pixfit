@@ -1,0 +1,43 @@
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+import { createDemo } from '../src/demo.js';
+import { makeSprite, makeLayer, hexToColor } from '../src/core.js';
+import { makeTilemap, mapLayer } from '../src/tilemap.js';
+import { serializeWorkspace } from '../src/storage.js';
+
+const w=createDemo(),sprite=makeSprite('Layer controls',16,16),bottom=sprite.layers[0],top=makeLayer(16,16,'Top');
+bottom.pixels.fill(hexToColor('#ff3300'));sprite.layers.push(top);sprite.activeLayerId=top.id;
+const map=makeTilemap('Map controls',4,4),ground=map.layers[0],details=mapLayer(4,4,'Details');map.layers.push(details);map.activeLayerId=details.id;
+w.sprites=[sprite];w.activeId=sprite.id;w.tilesets=[];w.tilemaps=[map];w.session={tabs:[sprite.id,map.id],activeTab:sprite.id,view:'pixel'};
+const browser=await chromium.launch({...(process.env.PIXFIT_BROWSER?{executablePath:process.env.PIXFIT_BROWSER}:{channel:'chrome'}),headless:true});
+const page=await browser.newPage({viewport:{width:1440,height:1000},colorScheme:'dark'}),errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+const theme=()=>page.locator('html').getAttribute('data-theme');
+const action=(name,id)=>page.locator(`[data-action="${name}"]${id?`[data-id="${id}"]`:''}`).first().click();
+const saved=()=>page.waitForFunction(()=>document.querySelector('#save-status')?.textContent.includes('All changes saved'));
+const rename=async(id,name)=>{await action('rename-layer',id);await page.fill('[name="name"]',name);await page.click('#dialog button[type="submit"]');};
+try{
+  await page.addInitScript(data=>{if(!sessionStorage.getItem('fixture')){localStorage.setItem('pixfit-workspace',JSON.stringify(data));sessionStorage.setItem('fixture','1');}},serializeWorkspace(w));
+  await page.goto('http://127.0.0.1:5173');await page.locator('.library-page').waitFor();assert.equal(await theme(),'dark');
+  await page.emulateMedia({colorScheme:'light'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');assert.equal(await theme(),'light');
+  await action('settings');await page.selectOption('#theme-setting','dark');assert.equal(await theme(),'dark');await saved();
+  await page.reload();await page.locator('.library-page').waitFor();assert.equal(await theme(),'dark');
+  await page.locator('.library-open').filter({hasText:'Layer controls'}).click();
+  const pixels=await page.locator('#art-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data));
+  assert.equal(await page.locator('.layer-row-actions').count(),2);assert.equal(await page.locator('.edit-layer-actions').count(),0);
+  await rename(bottom.id,'Renamed bottom');assert.equal(await page.locator('.layer-row.active').getAttribute('data-layer'),top.id);
+  await action('layer-up',bottom.id);assert.equal(await page.locator('.layer-row').first().getAttribute('data-layer'),bottom.id);
+  assert.equal(await page.locator(`[data-action="layer-up"][data-id="${bottom.id}"]`).isDisabled(),true);
+  await action('layer-down',bottom.id);await action('toggle-layer',bottom.id);await action('toggle-layer',bottom.id);
+  await page.screenshot({path:'.screenshots/dark-pixel-layers.png',fullPage:true,animations:'disabled'});
+  await action('settings');await page.selectOption('#theme-setting','light');await page.keyboard.press('Escape');
+  assert.deepEqual(await page.locator('#art-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data)),pixels);
+  await action('delete-layer',bottom.id);assert.equal(await page.locator('.layer-row').count(),1);assert.equal(await page.locator('.layer-row.active').getAttribute('data-layer'),top.id);
+  await action('open-tab',map.id);await rename(ground.id,'Renamed ground');assert.match(await page.locator('.layer-row.active').innerText(),/Details/);
+  await action('map-layer-up',ground.id);assert.match(await page.locator('.layer-row').first().innerText(),/Renamed ground/);
+  await action('map-layer-down',ground.id);await action('settings');await page.selectOption('#theme-setting','system');await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await theme(),'dark');await page.keyboard.press('Escape');
+  await page.screenshot({path:'.screenshots/dark-map-layers.png',fullPage:true,animations:'disabled'});
+  await action('map-delete-layer',ground.id);assert.equal(await page.locator('.layer-row').count(),1);assert.equal(await page.locator('[data-action="map-delete-layer"]').isDisabled(),true);
+  await saved();await page.reload();await page.locator('.library-page').waitFor();await action('settings');assert.equal(await page.locator('#theme-setting').inputValue(),'system');
+  assert.deepEqual(errors,[]);console.log('Appearance and layer controls passed: system theme changes, saved overrides, unchanged artwork, per-row rename/reorder/delete, and last-layer protection in both editors.');
+}finally{await browser.close();}

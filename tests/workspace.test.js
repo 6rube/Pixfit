@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSprite, hexToColor, uid, shapeSelection } from '../src/core.js';
 import { buildTileset, tileDescriptors, extractTile, transformImage, transformMask, selectionClipboard, pastePixels, animatedTileIndex } from '../src/tiles.js';
-import { makeTilemap, paintMap, paintTerrain, resolveTerrain, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
+import { makeTilemap, paintMap, paintTerrain, resolveTerrain, resolveMapTerrain, paintMapBrush, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
 import { serializeWorkspace, parseWorkspace, cleanTile } from '../src/storage.js';
 import { createDemo } from '../src/demo.js';
 import { godotPackage, zipFiles } from '../src/godot.js';
@@ -84,11 +84,54 @@ test('texture brushes and terrain intent survive backups and resizing',()=>{
   const frame=renderTilemap(m,t);assert.deepEqual(Array.from(frame.pixels.slice(0,4)),[red,yellow,red,yellow]);
   const restored=parseWorkspace(JSON.parse(JSON.stringify(serializeWorkspace(w)))).tilemaps[0];
   assert.deepEqual(restored,m);assert.deepEqual(renderTilemap(restored,t),frame);
+  t.options.terrainA=w.sprites[0].id;
+  assert.deepEqual(renderTilemap(m,w),frame,'legacy texture snapshots remain unchanged when their library source changes');
   const resized=resizeTilemap(m,5,5);assert.equal(resized.layers[0].terrain[12],3);assert.equal(resized.layers[0].terrain[0],1);
 });
 test('animated map tiles resolve frame sequence by FPS',()=>{
   const t=atlas();t.animations={0:{frames:[0,15],fps:2}};assert.equal(animatedTileIndex(t,0,.1),0);assert.equal(animatedTileIndex(t,0,.6),15);assert.equal(animatedTileIndex(t,0,1.1),0);
   const m=makeTilemap('Animated',1,1,t);paintMap(m,m.layers[0],0,0,0);assert.equal(renderTilemap(m,t,.1).pixels[0],blue);assert.equal(renderTilemap(m,t,.6).pixels[0],red);
+});
+
+test('a map mixes imported tiles, generated tiles and repeating textures across saves and resize',()=>{
+  const w=createDemo(),a=atlas(),b=atlas({size:8}),pattern=makeSprite('Pattern',3,1);
+  b.imported=true;b.pixels.fill(yellow);b.animations={0:{frames:[0,1],fps:2}};
+  pattern.layers[0].pixels.set([red,blue,yellow]);w.sprites.push(pattern);w.tilesets=[a,b];
+  const m=makeTilemap('Mixed',4,2,a),l=m.layers[0];w.tilemaps=[m];
+  m.sources=[{kind:'tileset',assetId:b.id},{kind:'texture',assetId:pattern.id}];
+  paintMapBrush(m,l,0,0,{source:0,kind:'tile',value:15});
+  paintMapBrush(m,l,1,0,{source:1,kind:'tile',value:0});
+  paintMapBrush(m,l,2,0,{source:2,kind:'texture'});paintMapBrush(m,l,3,0,{source:2,kind:'texture'});
+  resolveMapTerrain(m,l,w);
+  const frame=renderTilemap(m,w,.6);assert.equal(frame.pixels[0],red);assert.equal(frame.pixels[16],yellow);
+  assert.deepEqual(Array.from(frame.pixels.slice(32,37)),[yellow,red,blue,yellow,red]);
+  const restored=parseWorkspace(JSON.parse(JSON.stringify(serializeWorkspace(w))));
+  assert.deepEqual(restored.tilemaps[0],m);assert.deepEqual(renderTilemap(restored.tilemaps[0],restored,.6),frame);
+  const resized=resizeTilemap(m,5,3);assert.equal(resized.layers[0].sources[2],2);assert.equal(resized.cellWidth,16);
+  paintMapBrush(m,l,2,0,{source:1,kind:'tile',value:15},'fill');assert.deepEqual(Array.from(l.sources.slice(0,4)),[0,1,1,1]);
+  assert.equal(l.cells[1],1);assert.equal(l.cells[2],16);assert.equal(l.cells[3],16);
+  paintMapBrush(m,l,1,0,{},'erase');resolveMapTerrain(m,l,w);assert.equal(renderTilemap(m,w).pixels[16],0);
+  const bad=serializeWorkspace(w);bad.tilemaps[0].sources[0].assetId='missing';assert.throws(()=>parseWorkspace(bad));
+});
+
+test('multiple terrain sets connect only to their own source and preserve manual tiles and textures',()=>{
+  const a=atlas({mode:'blob'}),b=atlas({mode:'blob'}),texture=terrain(yellow),w={tilesets:[a,b],sprites:[texture]};
+  const m=makeTilemap('Terrain sources',5,3,a),l=m.layers[0];m.sources=[{kind:'tileset',assetId:b.id},{kind:'texture',assetId:texture.id}];
+  const paint=(x,y,source,kind='terrain',value=3)=>{paintMapBrush(m,l,x,y,{source,kind,value});resolveMapTerrain(m,l,w);};
+  paint(1,1,0);paint(2,1,1);paint(3,1,1);
+  assert.equal(a.masks[l.cells[6]-1],0);assert.equal(b.masks[l.cells[7]-1],2);assert.equal(b.masks[l.cells[8]-1],8);
+  paint(2,1,2,'texture');assert.equal(b.masks[l.cells[8]-1],0);assert.equal(renderTilemap(m,w).pixels[16*80+32],yellow);
+  const corner=atlas();w.tilesets.push(corner);m.sources.push({kind:'tileset',assetId:corner.id});
+  paint(0,0,0,'tile',15);paint(1,1,3);
+  assert.equal(l.cells[0],16);assert.equal(l.terrain[7],6);assert.equal(l.sources[7],2);
+  const before=structuredClone(l);resolveMapTerrain(m,l,w);assert.deepEqual(l,before);
+});
+
+test('texture-only maps need no generated tileset',()=>{
+  const w=createDemo(),m=makeTilemap('Textures only',2,2);w.tilesets=[];w.tilemaps=[m];
+  m.sources=[{kind:'texture',assetId:w.sprites[0].id}];paintMapBrush(m,m.layers[0],0,0,{source:1,kind:'texture'},'fill');
+  const restored=parseWorkspace(JSON.parse(JSON.stringify(serializeWorkspace(w))));
+  assert.equal(restored.tilemaps[0].tilesetId,null);assert.deepEqual(renderTilemap(m,w),renderTilemap(restored.tilemaps[0],restored));
 });
 test('version 2 backups preserve open tabs, maps, animations, slopes and paste preferences',()=>{
   const w=createDemo(),t=atlas({slopes1:true,slopes2:true,overrides:{2:{rotation:180,cutoff:1,flipY:true}}});t.animations={0:{frames:[0,1],fps:12}};w.tilesets=[t];w.tilemaps=[makeTilemap('World',4,4,t)];paintMap(w.tilemaps[0],w.tilemaps[0].layers[0],2,2,15);
