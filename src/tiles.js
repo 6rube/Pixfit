@@ -146,6 +146,23 @@ export function selectionClipboard(pixels,width,height,selection=null) {
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y+y0)*width+x+x0;if(!selection||selection[i]){mask[y*w+x]=1;result[y*w+x]=pixels[i];}}
   return {pixels:result,mask,width:w,height:h,x:x0,y:y0};
 }
+// Transform both pixels and selection holes, anchored at the original top left.
+export function transformSelection(pixels,width,height,selection,rotation=0,flipX=false,flipY=false) {
+  if(!selection)return null;
+  const clip=selectionClipboard(pixels,width,height,selection);
+  if(!clip)return null;
+  const image=transformImage(clip,rotation,flipX,flipY);
+  const mask=transformImage({...clip,pixels:clip.mask},rotation,flipX,flipY).pixels;
+  const result=new Uint32Array(pixels),nextSelection=new Uint8Array(width*height);
+  for(let i=0;i<selection.length;i++)if(selection[i])result[i]=0;
+  for(let y=0;y<image.height;y++)for(let x=0;x<image.width;x++){
+    const source=y*image.width+x,px=clip.x+x,py=clip.y+y;
+    if(!mask[source]||px>=width||py>=height)continue;
+    const dest=py*width+px;
+    result[dest]=image.pixels[source];nextSelection[dest]=1;
+  }
+  return {pixels:result,selection:nextSelection};
+}
 export function pastePixels(target,width,height,clipboard,x=clipboard.x,y=clipboard.y,selection=null) {
   const mask=new Uint8Array(width*height);
   for(let sy=0;sy<clipboard.height;sy++)for(let sx=0;sx<clipboard.width;sx++) {

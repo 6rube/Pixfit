@@ -2,7 +2,7 @@ export const MAX_SIZE = 512;
 export const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 export const rgba = (r, g, b, a = 255) => (((r << 24) | (g << 16) | (b << 8) | a) >>> 0);
-export const hexToColor = (hex) => (parseInt(hex.replace('#', '').slice(0, 6), 16) * 256 + 255) >>> 0;
+export const hexToColor = (hex) => hex === 'transparent' ? 0 : (parseInt(hex.replace('#', '').slice(0, 6), 16) * 256 + 255) >>> 0;
 export const colorToHex = (color) => `#${(color >>> 8).toString(16).padStart(6, '0')}`;
 export const channels = (color) => [color >>> 24, (color >>> 16) & 255, (color >>> 8) & 255, color & 255];
 
@@ -90,10 +90,12 @@ export function floodFill(pixels, width, height, x, y, color, selection = null, 
 }
 export function shapeSelection(width, height, x0, y0, x1, y1, ellipse = false) {
   const mask = new Uint8Array(width * height);
-  const left = Math.min(x0, x1), right = Math.max(x0, x1), top = Math.min(y0, y1), bottom = Math.max(y0, y1);
-  const rx = (right - left + 1) / 2, ry = (bottom - top + 1) / 2, cx = left + rx - 0.5, cy = top + ry - 0.5;
-  for (let y = Math.max(0, top); y <= Math.min(height - 1, bottom); y++) {
-    for (let x = Math.max(0, left); x <= Math.min(width - 1, right); x++) {
+  // Drag endpoints are boundaries: 0 to 32 spans 32 pixels. Keep clicks
+  // and horizontal/vertical drags at least one pixel thick.
+  const left = Math.min(x0, x1), right = Math.max(x0, x1) + (x0 === x1 ? 1 : 0), top = Math.min(y0, y1), bottom = Math.max(y0, y1) + (y0 === y1 ? 1 : 0);
+  const rx = (right - left) / 2, ry = (bottom - top) / 2, cx = left + rx - 0.5, cy = top + ry - 0.5;
+  for (let y = Math.max(0, top); y < Math.min(height, bottom); y++) {
+    for (let x = Math.max(0, left); x < Math.min(width, right); x++) {
       if (!ellipse || ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1) mask[y * width + x] = 1;
     }
   }

@@ -106,7 +106,7 @@ export function parseWorkspace(data) {
     return {id:id(m.id),kind:'tilemap',name:name(m.name),width,height,cellWidth,cellHeight,tilesetId:atlas?.id||null,layers,...(sources?{sources}:{}),...(textures?{textures}:{}),activeLayerId:layers.some(l=>l.id===m.activeLayerId)?m.activeLayerId:layers[0].id,updatedAt:Number(m.updatedAt)||Date.now()};
   });
   const raw = data.settings || {}, settings = { ...DEFAULT_SETTINGS, tile: cleanTile(raw.tile) };
-  for (const key of ['color', 'secondaryColor']) if (validColor(raw[key])) settings[key] = raw[key];
+  for (const key of ['color', 'secondaryColor']) if (raw[key] === 'transparent' || validColor(raw[key])) settings[key] = raw[key];
   for (const key of ['mirrorX', 'mirrorY', 'dither', 'grid']) settings[key] = !!raw[key];
   settings.brushSize = Number.isInteger(raw.brushSize) && raw.brushSize >= 1 && raw.brushSize <= 32 ? raw.brushSize : 1;
   settings.palette = ['woodland', 'pastel', 'classic', 'custom'].includes(raw.palette) ? raw.palette : 'woodland';

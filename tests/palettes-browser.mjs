@@ -13,7 +13,7 @@ try{
   assert.equal(await page.locator('.header-actions [data-action="library"]').count(),1);
   assert.equal(await page.locator('.header-actions [data-action="export"]').count(),1);
   await action('new-palette');await page.fill('#dialog [name="name"]','Sunset');await action('palette-add-color');await page.fill('[name="palette-color"]','#ff8800');await submit();
-  const first=await page.inputValue('#palette-select');assert.equal(await page.locator('.palette-grid .swatch').count(),1);
+  const first=await page.inputValue('#palette-select');assert.equal(await page.locator('.palette-grid .swatch').count(),2);
   await action('duplicate-palette');await page.fill('#dialog [name="name"]','Dawn');await action('palette-add-color');await page.locator('[name="palette-color"]').nth(1).fill('#aabbcc');await submit();
   const second=await page.inputValue('#palette-select');assert.notEqual(first,second);
   await action('edit-palette');await page.fill('#dialog [name="name"]','Dawn revised');await page.locator('[data-action="palette-remove-color"]').first().click();await submit();

@@ -3,7 +3,7 @@ import { loadWorkspace, saveWorkspace, serializeWorkspace, parseWorkspace, works
 import { createDemo, PALETTES } from './demo.js';
 import { MAX_PALETTES, validatePalette, importPalette, exportPalette } from './palettes.js';
 import { icon } from './icons.js';
-import { buildTileset, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels, blendPixel } from './tiles.js';
+import { buildTileset, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels, transformSelection, blendPixel } from './tiles.js';
 import { makeTilemap, mapLayer, paintMapBrush, placeMapDecal, eraseMapDecal, resolveMapTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
 import { godotPackage, zipFiles } from './godot.js';
 
@@ -11,7 +11,7 @@ const $ = (selector) => document.querySelector(selector);
 const escape = (value) => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const button = (action, glyph, label, cls = '', extra = '') => `<button type="button" class="${cls}" data-action="${action}" title="${escape(label)}" aria-label="${escape(label)}" ${extra}>${icon(glyph)}<span>${escape(label)}</span></button>`;
 const iconButton = (action, glyph, label, extra = '') => button(action, glyph, label, 'icon-button', extra);
-const toolList = [ ['pencil','pencil','Pencil','B'], ['eraser','eraser','Eraser','E'], ['bucket','bucket','Fill','G'], ['picker','picker','Eyedropper','I'], ['rect','select','Rectangle select','M'], ['ellipse','circle','Ellipse select','O'], ['color-select','wand','Select by color','W'], ['move','move','Move pixels','V'], ['pan','hand','Pan canvas','H'] ];
+const toolList = [ ['pencil','pencil','Pencil','B'], ['line','line','Line','L'], ['bucket','bucket','Fill','G'], ['picker','picker','Eyedropper','I'], ['rect','select','Rectangle select','M'], ['ellipse','circle','Ellipse select','O'], ['color-select','wand','Select by color','W'], ['move','move','Move pixels','V'], ['pan','hand','Pan canvas','H'] ];
 const systemTheme=window.matchMedia('(prefers-color-scheme: dark)');
 let workspace;
 function applyTheme(){
@@ -182,11 +182,11 @@ function pickPalette(){
 function renderLeft() {
   if (state.view === 'tiles') { renderTilesLeft(); return; }
   if (state.view === 'map') { renderMapLeft(); return; }
-  const opts = settings(), colors = currentPalette().colors;
+  const opts = settings(), colors = currentPalette().colors, transparent=opts.color==='transparent';
   $('#left-panel').innerHTML = `
     <section class="panel-section tools-section">${sectionTitle('YOUR TOOLBOX', '<span class="key-hint">B</span>')}
       <div class="tool-grid">${toolList.map(([id,glyph,name,key]) => `<button class="tool-button ${state.tool === id ? 'active' : ''}" data-action="tool" data-tool="${id}" title="${name} (${key})" aria-label="${name} (${key})" aria-pressed="${state.tool === id}">${icon(glyph)}<span>${name}</span><kbd>${key}</kbd></button>`).join('')}</div>
-      <div class="tool-description">${escape(({pencil:'Every great world starts with a pixel.',eraser:'A little room for a fresh start.',bucket:'Fill a connected area with your color.',picker:'Find your next color on the canvas.',rect:'Draw a rectangle to limit your edits.',ellipse:'Draw an ellipse to limit your edits.','color-select':'Select every visible pixel of one color.',move:'Drag a layer or selected pixels.',pan:'Drag to explore the infinite workspace.'})[state.tool])}</div>
+      <div class="tool-description">${escape(({pencil:'Every great world starts with a pixel.',line:'Drag to draw a straight line. Brush size sets its thickness.',bucket:'Fill a connected area with your color.',picker:'Find your next color on the canvas.',rect:'Draw a rectangle to limit your edits.',ellipse:'Draw an ellipse to limit your edits.','color-select':'Select every visible pixel of one color.',move:'Drag a layer or selected pixels.',pan:'Drag to explore the infinite workspace.'})[state.tool])}</div>
     </section>
     <section class="panel-section">${sectionTitle('BRUSH', `<span class="subtle">${opts.brushSize} px</span>`)}
       <div class="brush-sizes">${[1,2,4,8,16].map(size => `<button data-action="brush" data-size="${size}" class="${opts.brushSize === size ? 'active' : ''}" title="${size} pixel brush" aria-label="${size} pixel brush" aria-pressed="${opts.brushSize === size}"><span style="width:${Math.min(18,size+3)}px;height:${Math.min(18,size+3)}px"></span></button>`).join('')}</div>
@@ -197,11 +197,12 @@ function renderLeft() {
     <section class="panel-section palette-section">${sectionTitle('COLOR PALETTE',iconButton('add-color','plus','Add foreground color to palette'))}
       <div class="palette-select-wrap"><select id="palette-select" aria-label="Color palette">${paletteChoices().map(p=>`<option value="${p.id}" ${opts.palette===p.id?'selected':''}>${escape(p.name)} · ${p.colors.length} colors</option>`).join('')}</select></div>
       <div class="palette-actions">${iconButton('new-palette','plus','New palette')}${iconButton('edit-palette','pencil','Edit palette')}${iconButton('duplicate-palette','copy','Duplicate palette')}${iconButton('import-palette','upload','Import palette')}${iconButton('export-palette','download','Export palette')}${iconButton('delete-palette','trash','Delete palette',workspace.palettes.saved.some(p=>p.id===opts.palette)?'':'disabled')}</div>
-      <div class="palette-grid">${colors.length ? colors.map(c => `<button class="swatch ${c.toLowerCase() === opts.color.toLowerCase() ? 'active' : ''}" data-action="color" data-color="${c}" style="--swatch:${c}" title="${c}" aria-label="Color ${c}" aria-pressed="${c.toLowerCase() === opts.color.toLowerCase()}"></button>`).join('') : '<p class="empty-palette">Add your foreground color with +, or open Edit palette.</p>'}</div>
-      <div class="current-color"><label class="color-well" title="Choose a color"><input id="color-input" type="color" value="${opts.color}" aria-label="Choose foreground color"/></label><div><span>Foreground</span><input id="hex-input" aria-label="Hex color" value="${opts.color.toUpperCase()}" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"/></div>${iconButton('swap-colors','swap','Swap foreground and background (X)')}<span class="background-color" style="background:${opts.secondaryColor}" title="Background color ${opts.secondaryColor}"></span></div>
+      <div class="palette-grid"><button class="swatch transparent-color ${transparent?'active':''}" data-action="color" data-color="transparent" title="Transparent · erase with any drawing tool" aria-label="Transparent" aria-pressed="${transparent}"></button>${colors.length ? colors.map(c => `<button class="swatch ${c.toLowerCase() === opts.color.toLowerCase() ? 'active' : ''}" data-action="color" data-color="${c}" style="--swatch:${c}" title="${c}" aria-label="Color ${c}" aria-pressed="${c.toLowerCase() === opts.color.toLowerCase()}"></button>`).join('') : '<p class="empty-palette">Add your foreground color with +, or open Edit palette.</p>'}</div>
+      <div class="current-color"><label class="color-well ${transparent?'transparent-color':''}" title="Choose a color"><input id="color-input" type="color" value="${transparent?'#000000':opts.color}" aria-label="Choose foreground color"/></label><div><span>Foreground</span><input id="hex-input" aria-label="Hex color" value="${transparent?'Transparent':opts.color.toUpperCase()}" maxlength="11" spellcheck="false" pattern="#[0-9a-fA-F]{6}|[Tt]ransparent"/></div>${iconButton('swap-colors','swap','Swap foreground and background (X)')}<span class="background-color ${opts.secondaryColor==='transparent'?'transparent-color':''}" style="${opts.secondaryColor==='transparent'?'':`background:${opts.secondaryColor}`}" title="Background color ${opts.secondaryColor}"></span></div>
     </section>
-    <section class="panel-section clipboard-section">${sectionTitle('SELECTION & CLIPBOARD')}<div class="clipboard-actions">${button('copy-selection','copy','Copy','button outlined')}${button('paste-selection','layers','Paste','button outlined',state.clipboard?'':'disabled')}</div><label class="checkbox-row"><input id="paste-new-layer" type="checkbox" ${opts.pasteNewLayer?'checked':''}/>Paste into a new layer</label><p class="field-note">Ctrl+C / Ctrl+V · Hold Ctrl to pick a color.</p></section>
+    <section class="panel-section clipboard-section">${sectionTitle('SELECTION & CLIPBOARD')}<div class="clipboard-actions">${button('copy-selection','copy','Copy','button outlined')}${button('paste-selection','layers','Paste','button outlined',state.clipboard?'':'disabled')}</div><div class="clipboard-actions selection-transforms">${button('rotate-selection-left','undo','Rotate left','button outlined','disabled')}${button('rotate-selection-right','redo','Rotate right','button outlined','disabled')}${button('flip-selection-x','mirrorX','Flip horizontal','button outlined','disabled')}${button('flip-selection-y','mirrorY','Flip vertical','button outlined','disabled')}</div><p class="field-note">Rotate 90° from the selection's top left. Pixels beyond the canvas are cropped.</p><label class="checkbox-row"><input id="paste-new-layer" type="checkbox" ${opts.pasteNewLayer?'checked':''}/>Paste into a new layer</label><p class="field-note">Ctrl+C / Ctrl+V · Hold Ctrl to pick a color.</p></section>
     <div class="left-bottom">${button('import-image','upload','Import an image','button outlined full-width')}<p>A tiny canvas. Endless possibilities.</p></div>`;
+  updateSelectionTransforms();
 }
 function renderRight() {
   if (state.view === 'tiles') { renderTilesRight(); return; }
@@ -322,7 +323,12 @@ function drawOverlay() {
     ctx.globalAlpha=.58;ctx.drawImage(mapPreviewTexture,preview.x,preview.y);ctx.globalAlpha=1;
     ctx.strokeStyle='#d7efae';ctx.lineWidth=1/scale;ctx.setLineDash([4/scale,3/scale]);ctx.strokeRect(preview.x,preview.y,preview.image.width,preview.image.height);ctx.setLineDash([]);
   }
-  const status=$('#selection-status');if(status)status.innerHTML=state.selection?`<button class="text-link" data-action="deselect">${state.selection.reduce((n,v)=>n+v,0).toLocaleString()} px selected ×</button>`:'';
+  const count=state.selection?.reduce((n,v)=>n+v,0)||0;
+  const status=$('#selection-status');if(status)status.innerHTML=state.selection?`<button class="text-link" data-action="deselect">${count.toLocaleString()} px selected ×</button>`:'';
+  updateSelectionTransforms(count);
+}
+function updateSelectionTransforms(count=state.selection?.reduce((n,v)=>n+v,0)||0){
+  document.querySelectorAll('.selection-transforms button').forEach(button=>button.disabled=state.view!=='pixel'||!count||!layer().visible);
 }
 function mapDecalPreview(point=state.cursor){
   if(state.view!=='map'||state.mapTool!=='paint'||state.drag||!point)return null;
@@ -344,12 +350,19 @@ function zoomBy(factor, clientX, clientY) {
 function canvasPoint(e) {const rect=$('#canvas-position').getBoundingClientRect();return{x:Math.floor((e.clientX-rect.left)/state.zoom),y:Math.floor((e.clientY-rect.top)/state.zoom)};}
 function updateCursor() {
   const cursor=$('#brush-cursor');if(!cursor)return;const p=state.cursor,d=dimensions();
-  if(state.view!=='pixel'||!p||p.x<0||p.y<0||p.x>=d.width||p.y>=d.height||!['pencil','eraser'].includes(state.tool)||state.space){cursor.style.display='none';return;}
+  if(state.view!=='pixel'||!p||p.x<0||p.y<0||p.x>=d.width||p.y>=d.height||!['pencil','line'].includes(state.tool)||state.space){cursor.style.display='none';return;}
   const stage=$('#stage'),size=settings().brushSize,offset=Math.floor(size/2);
   cursor.style.cssText=`display:block;left:${stage.clientWidth/2+state.pan.x+(p.x-offset-d.width/2)*state.zoom}px;top:${stage.clientHeight/2+state.pan.y+(p.y-offset-d.height/2)*state.zoom}px;width:${size*state.zoom}px;height:${size*state.zoom}px`;
 }
 function brushAt(x,y,event) {
-  stamp(layer().pixels,sprite().width,sprite().height,x,y,state.tool==='eraser'?0:hexToColor(event?.button===2||state.drag?.button===2?settings().secondaryColor:settings().color),{size:settings().brushSize,mirrorX:settings().mirrorX,mirrorY:settings().mirrorY,dither:settings().dither,selection:state.selection});
+  stamp(layer().pixels,sprite().width,sprite().height,x,y,hexToColor(event?.button===2||state.drag?.button===2?settings().secondaryColor:settings().color),{size:settings().brushSize,mirrorX:settings().mirrorX,mirrorY:settings().mirrorY,dither:settings().dither,selection:state.selection});
+}
+function previewLine(p) {
+  const drag=state.drag,d=dimensions();
+  layer().pixels.set(drag.pixels);
+  const x=clamp(p.x,-32,d.width+32),y=clamp(p.y,-32,d.height+32);
+  linePoints(drag.start.x,drag.start.y,x,y,(px,py)=>brushAt(px,py));
+  updateCanvas();
 }
 function bindStage() {
   const stage=$('#stage');
@@ -363,7 +376,7 @@ function bindStage() {
     if(state.view==='tiles'){const tile=tileDescriptors(state.tile).find(t=>p.x>=t.x&&p.x<t.x+t.width&&p.y>=t.y&&p.y<t.y+t.height);if(tile){state.selectedTile=tile.id;drawOverlay();renderTilesRight();}return;}
     if(state.view==='map'){mapPointerDown(p,e);return;}
     const tool=e.ctrlKey||e.altKey?'picker':state.tool;
-    if(tool==='picker'){const c=composite(sprite())[p.y*d.width+p.x];if(c&255){settings().color=colorToHex(c);changed();renderLeft();}return;}
+    if(tool==='picker'){const c=composite(sprite())[p.y*d.width+p.x];settings().color=c&255?colorToHex(c):'transparent';changed();renderLeft();return;}
     if(tool==='color-select'){const pixels=composite(sprite()),target=pixels[p.y*d.width+p.x];state.selection=Uint8Array.from(pixels,v=>v===target?1:0);drawOverlay();return;}
     if(tool==='rect'||tool==='ellipse'){state.drag={type:tool,start:p};state.selection=shapeSelection(d.width,d.height,p.x,p.y,p.x,p.y,tool==='ellipse');drawOverlay();return;}
     if(!layer().visible){toast('Show the active layer before editing it.');return;}
@@ -373,6 +386,7 @@ function bindStage() {
       for(const [x,y] of points)floodFill(layer().pixels,d.width,d.height,x,y,hexToColor(e.button===2?opts.secondaryColor:opts.color),state.selection,opts.dither);changed();updateCanvas();return;
     }
     if(tool==='move'){state.drag={type:'move',start:p,pixels:new Uint32Array(layer().pixels),selection:state.selection?new Uint8Array(state.selection):null};return;}
+    if(tool==='line'){state.drag={type:'line',start:p,pixels:new Uint32Array(layer().pixels),button:e.button};previewLine(p);return;}
     state.drag={type:'draw',last:p,button:e.button};brushAt(p.x,p.y,e);updateCanvas();
   });
   stage.addEventListener('pointermove',e=>{
@@ -382,13 +396,14 @@ function bindStage() {
     const drag=state.drag;if(!drag)return;
     if(drag.type==='pan'){state.pan.x=drag.pan.x+e.clientX-drag.clientX;state.pan.y=drag.pan.y+e.clientY-drag.clientY;positionCanvas();return;}
     if(drag.type==='map-draw'||drag.type==='map-rect'){mapPointerMove(p);return;}
+    if(drag.type==='line'){previewLine(p);return;}
     if(drag.type==='draw'){
       const next={x:clamp(p.x,-32,d.width+32),y:clamp(p.y,-32,d.height+32)};
       linePoints(drag.last.x,drag.last.y,next.x,next.y,(x,y)=>brushAt(x,y));drag.last=next;updateCanvas();
     } else if(drag.type==='rect'||drag.type==='ellipse'){state.selection=shapeSelection(d.width,d.height,drag.start.x,drag.start.y,p.x,p.y,drag.type==='ellipse');drawOverlay();}
     else if(drag.type==='move'){const moved=translatePixels(drag.pixels,d.width,d.height,p.x-drag.start.x,p.y-drag.start.y,drag.selection);layer().pixels=moved.pixels;state.selection=moved.selection;updateCanvas();}
   });
-  const end=()=>{if(state.drag&&['draw','move','map-draw','map-rect'].includes(state.drag.type)){changed();if(state.view==='map'){renderRight();if(state.mapFrame)paintCanvas($('#map-navigator'),state.mapFrame.pixels,state.mapFrame.width,state.mapFrame.height);}}state.drag=null;stage.classList.remove('dragging');};
+  const end=e=>{if(state.drag?.type==='line'&&e.type==='pointerup')previewLine(canvasPoint(e));if(state.drag&&['draw','line','move','map-draw','map-rect'].includes(state.drag.type)){changed();if(state.view==='map'){renderRight();if(state.mapFrame)paintCanvas($('#map-navigator'),state.mapFrame.pixels,state.mapFrame.width,state.mapFrame.height);}}state.drag=null;stage.classList.remove('dragging');};
   stage.addEventListener('pointerup',end);stage.addEventListener('pointercancel',end);stage.addEventListener('lostpointercapture',end);
   stage.addEventListener('pointerleave',()=>{state.cursor=null;updateCursor();});
 }
@@ -452,6 +467,14 @@ function pasteSelection(){
   else{x=clamp(x,0,Math.max(0,s.width-state.clipboard.width));y=clamp(y,0,Math.max(0,s.height-state.clipboard.height));}
   if(settings().pasteNewLayer){const pasted=makeLayer(s.width,s.height,'Pasted pixels');s.layers.splice(s.layers.findIndex(l=>l.id===s.activeLayerId)+1,0,pasted);s.activeLayerId=pasted.id;}
   state.selection=pastePixels(layer().pixels,s.width,s.height,state.clipboard,x,y,targetSelection);state.tool='move';changed();renderLeft();renderRight();updateCanvas();toast('Pasted. Drag the selection to move it.');
+}
+function transformSelectedRegion(rotation=0,flipX=false,flipY=false){
+  if(state.view!=='pixel'||!state.selection)return;
+  if(!layer().visible)throw new Error('Show the active layer before transforming it.');
+  const s=sprite(),result=transformSelection(layer().pixels,s.width,s.height,state.selection,rotation,flipX,flipY);
+  if(!result)return;
+  checkpoint();layer().pixels=result.pixels;state.selection=result.selection;
+  changed();updateCanvas();
 }
 function newMapDialog(atlasId=null){
   const selected=atlasId||state.tile?.id||workspace.tilesets[0]?.id;
@@ -703,6 +726,10 @@ document.addEventListener('click',async e=>{
       case 'duplicate-asset':duplicateAsset(el.dataset.id);break;
       case 'copy-selection':copySelection();break;
       case 'paste-selection':pasteSelection();break;
+      case 'rotate-selection-left':transformSelectedRegion(-90);break;
+      case 'rotate-selection-right':transformSelectedRegion(90);break;
+      case 'flip-selection-x':transformSelectedRegion(0,true);break;
+      case 'flip-selection-y':transformSelectedRegion(0,false,true);break;
       case 'godot-export':await exportGodot();break;
       case 'rotate-tile':transformSelectedTile(90);break;
       case 'flip-tile-x':transformSelectedTile(0,true);break;
@@ -736,8 +763,9 @@ document.addEventListener('click',async e=>{
       case 'import-palette':pickPalette();break;
       case 'export-palette':download(new Blob([JSON.stringify(exportPalette(currentPalette()),null,2)],{type:'application/json'}),`${safeName(currentPalette().name)}.palette.json`);break;
       case 'palette-remove-color':el.closest('.palette-color-row').remove();break;
-      case 'palette-add-color':if(document.querySelectorAll('.palette-color-row').length>=128)throw new Error('A palette can hold 128 colors.');$('#palette-colors').insertAdjacentHTML('beforeend',paletteColorRow(settings().color));break;
+      case 'palette-add-color':if(settings().color==='transparent'){toast('Transparent is always available in every palette.');break;}if(document.querySelectorAll('.palette-color-row').length>=128)throw new Error('A palette can hold 128 colors.');$('#palette-colors').insertAdjacentHTML('beforeend',paletteColorRow(settings().color));break;
       case 'add-color':{
+        if(settings().color==='transparent'){toast('Transparent is always available in every palette.');break;}
         const palette=currentPalette();
         if(palette.builtin){paletteEditor(true,{name:palette.name+' copy',colors:[...palette.colors,...(palette.colors.includes(settings().color)?[]:[settings().color])]});break;}
         if(palette.colors.length>=128)throw new Error('A palette can hold 128 colors.');
@@ -798,7 +826,7 @@ document.addEventListener('change',e=>{try{
   if(el.matches('.palette-color-picker'))el.closest('.palette-color-row').querySelector('[name="palette-color"]').value=el.value;
   if(el.name==='palette-color'&&/^#[0-9a-f]{6}$/i.test(el.value))el.closest('.palette-color-row').querySelector('.palette-color-picker').value=el.value;
   if(id==='palette-select'){settings().palette=el.value;changed();renderLeft();}
-  if(id==='color-input'||id==='hex-input'){let color=el.value;if(!color.startsWith('#'))color=`#${color}`;if(!/^#[0-9a-fA-F]{6}$/.test(color)){toast('Enter a six-digit hex color, like #738B51.');el.value=settings().color;return;}settings().color=color.toLowerCase();changed();renderLeft();}
+  if(id==='color-input'||id==='hex-input'){let color=el.value.trim().toLowerCase();if(color!=='transparent'&&!color.startsWith('#'))color=`#${color}`;if(color!=='transparent'&&!/^#[0-9a-fA-F]{6}$/.test(color)){toast('Enter a six-digit hex color, like #738B51, or transparent.');el.value=settings().color;return;}settings().color=color.toLowerCase();changed();renderLeft();}
   if(id==='brush-range'){settings().brushSize=Number(el.value);changed();renderLeft();}
   if(id==='opacity'){if(!opacityEditing)checkpoint();layer().opacity=Number(el.value);opacityEditing=false;changed();updateCanvas();}
   if(id==='paste-new-layer'){settings().pasteNewLayer=el.checked;changed();}
@@ -849,7 +877,7 @@ document.addEventListener('keydown',e=>{try{
   if(key==='['||key===']'){settings().brushSize=clamp(settings().brushSize+(key==='['?-1:1),1,32);changed();renderLeft();}
 }catch(error){toast(error.message,true);}});
 document.addEventListener('keyup',e=>{if(e.key===' '){state.space=false;positionCanvas();}});
-window.addEventListener('blur',()=>{state.space=false;if(state.drag&&['draw','move','map-draw','map-rect'].includes(state.drag.type))changed();state.drag=null;});
+window.addEventListener('blur',()=>{state.space=false;if(state.drag&&['draw','line','move','map-draw','map-rect'].includes(state.drag.type))changed();state.drag=null;});
 window.addEventListener('resize',()=>{const d=dimensions(),stage=$('#stage');if(stage&&d.width*state.zoom>stage.clientWidth*1.3)fitCanvas();else positionCanvas();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&!state.saved)persist();});
 window.addEventListener('beforeunload',e=>{if(!state.saved){persist();e.preventDefault();e.returnValue='';}});

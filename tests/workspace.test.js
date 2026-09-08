@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSprite, hexToColor, uid, shapeSelection } from '../src/core.js';
-import { buildTileset, tileDescriptors, extractTile, transformImage, transformMask, selectionClipboard, pastePixels, animatedTileIndex } from '../src/tiles.js';
+import { buildTileset, tileDescriptors, extractTile, transformImage, transformMask, selectionClipboard, pastePixels, transformSelection, animatedTileIndex } from '../src/tiles.js';
 import { makeTilemap, paintMap, paintTerrain, resolveTerrain, resolveMapTerrain, paintMapBrush, placeMapDecal, eraseMapDecal, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
 import { serializeWorkspace, parseWorkspace, cleanTile } from '../src/storage.js';
 import { createDemo } from '../src/demo.js';
@@ -45,9 +45,70 @@ test('rotation exchanges dimensions and four quarter turns recover every pixel',
   for(let i=0;i<3;i++)result=transformImage(result,90);assert.deepEqual(result,image);
   const t=atlas({slopes2:true,overrides:{16:{rotation:90}}});assert.equal(t.tiles[16].spanX,2);assert.equal(t.tiles[16].spanY,1);
 });
+test('32 pixel selection boundaries copy and repeat five times into exactly 160 pixels',()=>{
+  const width=192,height=64,source=new Uint32Array(width*height).fill(red);
+  for(const endpoints of [[0,0,32,32],[32,32,0,0],[32,0,0,32],[0,32,32,0]]){
+    const mask=shapeSelection(width,height,...endpoints);
+    assert.equal(mask.reduce((sum,value)=>sum+value,0),1024);
+    assert.equal(mask[31*width+31],1);assert.equal(mask[32],0);assert.equal(mask[32*width],0);
+    const clip=selectionClipboard(source,width,height,mask);
+    assert.equal(clip.width,32);assert.equal(clip.height,32);
+    const target=new Uint32Array(width*height);
+    for(let i=0;i<5;i++)pastePixels(target,width,height,clip,i*32,0);
+    for(let y=0;y<height;y++)for(let x=0;x<width;x++)assert.equal(target[y*width+x],x<160&&y<32?red:0);
+  }
+});
+test('selection boundaries clip to canvas edges and retain one pixel clicks and lines',()=>{
+  for(const ellipse of [false,true]){
+    const forward=shapeSelection(64,64,0,0,32,32,ellipse);
+    assert.deepEqual(forward,shapeSelection(64,64,32,32,0,0,ellipse));
+    const clip=selectionClipboard(new Uint32Array(4096),64,64,forward);
+    assert.equal(clip.width,32);assert.equal(clip.height,32);
+    assert.equal(shapeSelection(8,8,3,3,3,3,ellipse).reduce((s,v)=>s+v,0),1);
+  }
+  for(const endpoints of [[0,0,32,32],[32,32,0,0],[-10,-10,40,40]])assert.equal(shapeSelection(32,32,...endpoints).reduce((s,v)=>s+v,0),1024);
+  assert.equal(shapeSelection(64,64,4,0,4,32).reduce((s,v)=>s+v,0),32);
+  assert.equal(shapeSelection(64,64,0,4,32,4).reduce((s,v)=>s+v,0),32);
+});
+test('selected regions rotate and flip with exact pixels, dimensions and no change to unrelated pixels',()=>{
+  const width=8,height=8,pixels=new Uint32Array(64),selection=shapeSelection(8,8,2,2,4,5);
+  pixels[0]=blue;
+  for(let y=0;y<3;y++)for(let x=0;x<2;x++)pixels[(y+2)*8+x+2]=(1+y*2+x)*256+128;
+  const cases=[[[90],[5,3,1,6,4,2],3,2],[[-90],[2,4,6,1,3,5],3,2],[[0,true],[2,1,4,3,6,5],2,3],[[0,false,true],[5,6,3,4,1,2],2,3]];
+  for(const [args,expected,w,h] of cases){
+    const result=transformSelection(pixels,width,height,selection,...args);
+    const clip=selectionClipboard(result.pixels,width,height,result.selection);
+    assert.equal(clip.x,2);assert.equal(clip.y,2);assert.equal(clip.width,w);assert.equal(clip.height,h);
+    assert.deepEqual(Array.from(clip.pixels),expected.map(n=>n*256+128));
+    assert.equal(result.pixels[0],blue);
+    for(let i=0;i<64;i++)if(selection[i]&&!result.selection[i])assert.equal(result.pixels[i],0);
+  }
+  let result={pixels,selection};
+  for(let i=0;i<4;i++)result=transformSelection(result.pixels,width,height,result.selection,90);
+  assert.deepEqual(result,{pixels,selection});
+});
+test('selection transforms retain holes, move transparent pixels and clip without wrapping rows',()=>{
+  const pixels=new Uint32Array(16).fill(blue),mask=new Uint8Array(16);
+  mask[0]=mask[4]=mask[5]=1;pixels[0]=red;pixels[4]=0;pixels[5]=red;
+  const result=transformSelection(pixels,4,4,mask,0,true);
+  assert.equal(result.pixels[0],0);assert.equal(result.pixels[1],red);
+  assert.equal(result.pixels[4],red);assert.equal(result.pixels[5],0);
+  assert.equal(result.selection[0],0);assert.equal(result.selection[1],1);
+  assert.equal(result.selection[5],1);assert.equal(result.pixels[6],blue);
+  const edge=shapeSelection(4,4,3,1,4,4),clipped=transformSelection(pixels,4,4,edge,90);
+  assert.equal(clipped.selection.reduce((s,v)=>s+v,0),1);
+  assert.equal(clipped.selection[7],1);assert.equal(clipped.pixels[8],blue);
+  assert.equal(transformSelection(pixels,4,4,null),null);
+  assert.equal(transformSelection(pixels,4,4,new Uint8Array(16)),null);
+});
+test('transparent foreground and background survive workspace backups',()=>{
+  const workspace=createDemo();workspace.settings.color='transparent';workspace.settings.secondaryColor='transparent';
+  const restored=parseWorkspace(serializeWorkspace(workspace));
+  assert.equal(restored.settings.color,'transparent');assert.equal(restored.settings.secondaryColor,'transparent');
+});
 test('clipboard preserves ellipse holes and restricts paste to the destination selection',()=>{
   const source=new Uint32Array(64).fill(red),mask=shapeSelection(8,8,1,1,6,6,true),clip=selectionClipboard(source,8,8,mask);
-  assert.equal(clip.width,6);assert.equal(clip.mask[0],0);
+  assert.equal(clip.width,5);assert.equal(clip.mask[0],0);
   const dest=new Uint32Array(64).fill(blue),selection=shapeSelection(8,8,2,2,4,4);pastePixels(dest,8,8,clip,1,1,selection);
   assert.equal(dest[0],blue);assert.equal(dest[3*8+3],red);assert.equal(dest[5*8+5],blue);
 });

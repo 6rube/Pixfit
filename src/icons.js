@@ -1,4 +1,5 @@
 const paths = {
+  line: '<path d="M4 20 20 4"/><circle cx="4" cy="20" r="1"/><circle cx="20" cy="4" r="1"/>',
   pencil: '<path d="m15 4 5 5M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>',
   eraser: '<path d="m8 20-5-5a2 2 0 0 1 0-3l9-9a2 2 0 0 1 3 0l6 6a2 2 0 0 1 0 3l-8 8H8ZM7 8l9 9M12 20h9"/>',
   bucket: '<path d="m5 3 11 11M9 5l-7 7a2 2 0 0 0 0 3l5 5a2 2 0 0 0 3 0l8-8L9 3M3 13h14M20 14s-3 4-3 5a3 3 0 0 0 6 0c0-1-3-5-3-5Z"/>',

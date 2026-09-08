@@ -10,6 +10,16 @@ test('pixel colors and PNG bytes round-trip without endian or alpha changes', ()
   assert.deepEqual(pixelsFromBytes(imageBytes(pixels)), pixels);
   assert.equal(colorToHex(red), '#ff0000');
 });
+test('transparent color clears connected pixels while respecting selection and dither',()=>{
+  assert.equal(hexToColor('transparent'),0);
+  const p=new Uint32Array(64).fill(red);for(let y=0;y<8;y++)p[y*8+4]=blue;
+  floodFill(p,8,8,0,0,hexToColor('transparent'));
+  for(let y=0;y<8;y++)for(let x=0;x<8;x++)assert.equal(p[y*8+x],x<4?0:x===4?blue:red);
+  const selected=new Uint32Array(64).fill(red),mask=shapeSelection(8,8,2,2,6,6);
+  floodFill(selected,8,8,3,3,0,mask,true);
+  assert.equal(selected.filter(v=>!v).length,8);
+  for(let i=0;i<64;i++)if(!mask[i])assert.equal(selected[i],red);
+});
 test('layers composite alpha and opacity in the correct order and respect visibility', () => {
   const s=makeSprite('Blend',1,1), top=makeLayer(1,1);s.layers[0].pixels[0]=blue;top.pixels[0]=red;top.opacity=50;s.layers.push(top);
   assert.equal(composite(s)[0],rgba(128,0,128));
@@ -21,14 +31,14 @@ test('even sized brushes mirror every pixel exactly across both axes', () => {
   for(let y=0;y<12;y++)for(let x=0;x<12;x++){assert.equal(p[y*12+x],p[y*12+11-x]);assert.equal(p[y*12+x],p[(11-y)*12+x]);}
 });
 test('brushes and dithering respect selection masks', () => {
-  const p=new Uint32Array(64),mask=shapeSelection(8,8,2,2,5,5);stamp(p,8,8,4,4,red,{size:8,dither:true,selection:mask});
+  const p=new Uint32Array(64),mask=shapeSelection(8,8,2,2,6,6);stamp(p,8,8,4,4,red,{size:8,dither:true,selection:mask});
   assert.equal(p.filter(v=>v===red).length,8);
   for(let i=0;i<p.length;i++)if(!mask[i])assert.equal(p[i],0);
 });
 test('bucket fill stays inside connected regions and selected pixels, with dithering', () => {
   const p=new Uint32Array(64);for(let y=0;y<8;y++)p[y*8+4]=blue;
   floodFill(p,8,8,0,0,red);assert.equal(p.filter(v=>v===red).length,32);assert.equal(p[7],0);
-  const p2=new Uint32Array(64),selection=shapeSelection(8,8,2,2,5,5);floodFill(p2,8,8,3,3,red,selection,true);
+  const p2=new Uint32Array(64),selection=shapeSelection(8,8,2,2,6,6);floodFill(p2,8,8,3,3,red,selection,true);
   assert.equal(p2.filter(v=>v===red).length,8);assert.equal(p2[0],0);
 });
 test('ellipse selections exclude corners and include their center', () => {
