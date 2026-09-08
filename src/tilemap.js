@@ -1,7 +1,7 @@
 import { uid, floodFill, composite } from './core.js';
 import { tileDescriptors, extractTile, animatedTileIndex, blendPixel } from './tiles.js';
 
-export function mapLayer(width,height,name='Ground') {return {id:uid(),name,visible:true,opacity:100,cells:new Uint32Array(width*height)};}
+export function mapLayer(width,height,name='Ground') {return {id:uid(),name,visible:true,opacity:100,cells:new Uint32Array(width*height),decals:[]};}
 export function makeTilemap(name,width,height,atlas) {
   atlas ||= {id:null,tileWidth:16,tileHeight:16};
   validateMapSize(width,height,atlas.tileWidth,atlas.tileHeight);
@@ -89,6 +89,20 @@ export function paintMapBrush(map,layer,x,y,brush,tool='paint') {
     for(let i=0;i<regions.length;i++)if(!regions[i])write(i);
   }else write(y*map.width+x);
 }
+// Large library textures are independent pixel-positioned stamps, not repeated cells.
+export function placeMapDecal(map,layer,x,y,source) {
+  layer.decals ||= [];
+  const decal={source,x,y};
+  layer.decals.push(decal);return decal;
+}
+export function eraseMapDecal(layer,x,y,assets,map) {
+  const decals=layer.decals||[];
+  for(let i=decals.length-1;i>=0;i--){
+    const decal=decals[i],image=mapSource(map,decal.source,assets);
+    if(image&&x>=decal.x&&y>=decal.y&&x<decal.x+image.width&&y<decal.y+image.height){decals.splice(i,1);return true;}
+  }
+  return false;
+}
 export function renderTilemap(map,atlas,time=0) {
   const assets=atlas?.tilesets?atlas:{tilesets:atlas?[atlas]:[],sprites:[]};
   const width=map.width*map.cellWidth,height=map.height*map.cellHeight,pixels=new Uint32Array(width*height);
@@ -117,6 +131,14 @@ export function renderTilemap(map,atlas,time=0) {
       for(let py=0;py<targetHeight&&y*map.cellHeight+py<height;py++)for(let px=0;px<targetWidth&&x*map.cellWidth+px<width;px++){
         const src=tile.pixels[Math.floor(py*tile.height/targetHeight)*tile.width+Math.floor(px*tile.width/targetWidth)];
         const i=(y*map.cellHeight+py)*width+x*map.cellWidth+px;pixels[i]=blendPixel(pixels[i],src,layer.opacity/100);
+      }
+    }
+    for(const decal of layer.decals||[]) {
+      const image=mapSource(map,decal.source,assets);if(!image||image.kind!=='sprite')continue;
+      if(!textureCache.has(image.id))textureCache.set(image.id,{...image,pixels:composite(image)});const source=textureCache.get(image.id);
+      for(let py=0;py<source.height;py++)for(let px=0;px<source.width;px++){
+        const dx=decal.x+px,dy=decal.y+py;if(dx<0||dy<0||dx>=width||dy>=height)continue;
+        const i=dy*width+dx;pixels[i]=blendPixel(pixels[i],source.pixels[py*source.width+px],layer.opacity/100);
       }
     }
   }

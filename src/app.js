@@ -3,8 +3,8 @@ import { loadWorkspace, saveWorkspace, serializeWorkspace, parseWorkspace, works
 import { createDemo, PALETTES } from './demo.js';
 import { MAX_PALETTES, validatePalette, importPalette, exportPalette } from './palettes.js';
 import { icon } from './icons.js';
-import { buildTileset, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels } from './tiles.js';
-import { makeTilemap, mapLayer, paintMapBrush, resolveMapTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
+import { buildTileset, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels, blendPixel } from './tiles.js';
+import { makeTilemap, mapLayer, paintMapBrush, placeMapDecal, eraseMapDecal, resolveMapTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
 import { godotPackage, zipFiles } from './godot.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -49,7 +49,7 @@ function openDocument(id) {
 }
 function checkCapacity(additionalPixels) { if (workspacePixelCount(workspace) + additionalPixels > MAX_WORKSPACE_PIXELS) throw new Error('This workspace can hold 32 million pixels across all layers and atlases. Export a backup and remove an unused asset to make room.'); }
 const history = () => { const id=activeDocument()?.id||sprite().id;if (!state.history.has(id)) state.history.set(id, { undo: [], redo: [] }); return state.history.get(id); };
-const texture = document.createElement('canvas'), repeatTexture = document.createElement('canvas');
+const texture = document.createElement('canvas'), repeatTexture = document.createElement('canvas'), mapPreviewTexture=document.createElement('canvas');
 let toastTimer;
 function toast(message, error = false) {
   const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`;
@@ -215,8 +215,7 @@ function renderRight() {
       <div class="layer-list">${[...s.layers].reverse().map(l => `<div class="layer-row ${l.id === active.id ? 'active' : ''}" data-layer="${l.id}"><button class="layer-pick" data-action="select-layer" data-id="${l.id}" aria-label="Select ${escape(l.name)}" aria-pressed="${l.id === active.id}"><span class="layer-thumb checker"><canvas data-layer-preview="${l.id}"></canvas></span><span class="layer-name">${escape(l.name)}<small>${l.id === active.id ? 'Active layer' : `${l.opacity}% opacity`}</small></span></button>${layerRowActions(s,l)}</div>`).join('')}</div>
       <div class="add-layer-bar">${button('add-layer','plus','Add layer','button outlined full-width')}</div>
     </section>
-    <section class="panel-section assets-section">${sectionTitle('IN YOUR LIBRARY', '<button class="text-link" data-action="library">View all</button>')}<div class="asset-strip">${workspace.sprites.filter(a => a.id !== s.id).slice(0,3).map(a => `<button class="mini-asset" data-action="open-sprite" data-id="${a.id}" title="Open ${escape(a.name)}"><span class="checker"><canvas data-asset-preview="${a.id}"></canvas></span><span>${escape(a.name)}</span></button>`).join('')}</div></section>
-    <div class="tiles-promo"><span class="promo-icon">${icon('tiles')}</span><h3>From pixels to places.</h3><p>Turn your artwork into a whole world of connected tiles.</p><button data-action="use-in-tiles">Open in tileset builder ${icon('arrow')}</button><span class="promo-pattern"></span></div>`;
+    <section class="panel-section assets-section">${sectionTitle('IN YOUR LIBRARY', '<button class="text-link" data-action="library">View all</button>')}<div class="asset-strip">${workspace.sprites.filter(a => a.id !== s.id).slice(0,3).map(a => `<button class="mini-asset" data-action="open-sprite" data-id="${a.id}" title="Open ${escape(a.name)}"><span class="checker"><canvas data-asset-preview="${a.id}"></canvas></span><span>${escape(a.name)}</span></button>`).join('')}</div></section>`;
   drawThumbnails();
 }
 function renderTilesLeft() {
@@ -317,7 +316,20 @@ function drawOverlay() {
   if(state.view==='tiles') {
     const tile=tileDescriptors(state.tile)[state.selectedTile];ctx.strokeStyle='#effacb';ctx.lineWidth=2/scale;ctx.strokeRect(tile.x+1/scale,tile.y+1/scale,tile.width-2/scale,tile.height-2/scale);
   }
+  const preview=mapDecalPreview();
+  if(preview){
+    paintCanvas(mapPreviewTexture,preview.image.pixels,preview.image.width,preview.image.height);
+    ctx.globalAlpha=.58;ctx.drawImage(mapPreviewTexture,preview.x,preview.y);ctx.globalAlpha=1;
+    ctx.strokeStyle='#d7efae';ctx.lineWidth=1/scale;ctx.setLineDash([4/scale,3/scale]);ctx.strokeRect(preview.x,preview.y,preview.image.width,preview.image.height);ctx.setLineDash([]);
+  }
   const status=$('#selection-status');if(status)status.innerHTML=state.selection?`<button class="text-link" data-action="deselect">${state.selection.reduce((n,v)=>n+v,0).toLocaleString()} px selected ×</button>`:'';
+}
+function mapDecalPreview(point=state.cursor){
+  if(state.view!=='map'||state.mapTool!=='paint'||state.drag||!point)return null;
+  const p=point,m=currentMap();if(p.x<0||p.y<0||p.x>=m.width*m.cellWidth||p.y>=m.height*m.cellHeight)return null;
+  const brush=mapBrushOptions().find(b=>b.id===state.mapTile);if(brush?.kind!=='texture')return null;
+  const image=workspace.sprites.find(s=>s.id===brush.assetId);if(!image||image.width<=m.cellWidth&&image.height<=m.cellHeight)return null;
+  return {image:{...image,pixels:composite(image)},x:Math.floor(p.x/m.cellWidth)*m.cellWidth,y:Math.floor(p.y/m.cellHeight)*m.cellHeight};
 }
 function fitCanvas() {
   const stage=$('#stage'), d=dimensions();if(!stage)return;
@@ -365,6 +377,7 @@ function bindStage() {
   });
   stage.addEventListener('pointermove',e=>{
     const p=canvasPoint(e);state.cursor=p;updateCursor();
+    if(state.view==='map'&&!state.drag)drawOverlay();
     const d=dimensions();const label=$('#pointer-status');if(label)label.innerHTML=`${icon(state.view==='tiles'?'tiles':toolList.find(t=>t[0]===state.tool)?.[1]||'pencil')}<span>${p.x>=0&&p.y>=0&&p.x<d.width&&p.y<d.height?`X: ${p.x} <span class="coordinate-y">Y: ${p.y}</span>`:state.view==='tiles'?'Tileset preview':toolList.find(t=>t[0]===state.tool)?.[2]}</span>`;
     const drag=state.drag;if(!drag)return;
     if(drag.type==='pan'){state.pan.x=drag.pan.x+e.clientX-drag.clientX;state.pan.y=drag.pan.y+e.clientY-drag.clientY;positionCanvas();return;}
@@ -461,7 +474,7 @@ function renderMapLeft(){
   const atlas=mapPaletteAtlas(),brushes=mapBrushOptions();
   if(!brushes.some(b=>b.id===state.mapTile))state.mapTile=brushes[0]?.id;
   const palette=items=>items.map(t=>`<button data-action="map-tile" data-index="${t.id}" class="checker ${state.mapTile===t.id?'active':''}" title="${escape(t.name)}" aria-label="Paint ${escape(t.name)}" aria-pressed="${state.mapTile===t.id}"><canvas data-map-brush="${t.id}"></canvas><span>${t.kind==='tile'?t.value+1:escape(t.name)}</span></button>`).join('');
-  $('#left-panel').innerHTML=`<section class="panel-section">${sectionTitle('MAP TOOLS')}<div class="map-tools">${[['paint','pencil','Paint'],['erase','eraser','Erase'],['fill','bucket','Fill'],['rect','select','Rectangle'],['picker','picker','Pick brush'],['pan','hand','Pan']].map(([id,glyph,name])=>`<button data-action="map-tool" data-tool="${id}" class="${state.mapTool===id?'active':''}" aria-pressed="${state.mapTool===id}">${icon(glyph)}<span>${name}</span></button>`).join('')}</div><p class="field-note">Mix tilesets and textures on any layer. Right-click erases. Hold Space to pan.</p></section><section class="panel-section map-palette-section">${sectionTitle('TILESETS & TEXTURES')}<label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>All textures · ${workspace.sprites.length}</option>${workspace.tilesets.map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · imported':''}</option>`).join('')}</select></label><p class="field-note">${!atlas?'Textures repeat at their original pixel size across painted cells.':atlas.imported?'Choose any tile to paint. Tiles fit the map’s fixed cell size.':'Choose connected autoterrain or paint individual tiles. Tiles fit the map’s fixed cell size.'}</p><div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit tileset','button outlined full-width')}</div>`:''}`;
+  $('#left-panel').innerHTML=`<section class="panel-section">${sectionTitle('MAP TOOLS')}<div class="map-tools">${[['paint','pencil','Paint'],['erase','eraser','Erase'],['fill','bucket','Fill'],['rect','select','Rectangle'],['picker','picker','Pick brush'],['pan','hand','Pan']].map(([id,glyph,name])=>`<button data-action="map-tool" data-tool="${id}" class="${state.mapTool===id?'active':''}" aria-pressed="${state.mapTool===id}">${icon(glyph)}<span>${name}</span></button>`).join('')}</div><p class="field-note">Mix tilesets and textures on any layer. Right-click erases. Hold Space to pan.</p></section><section class="panel-section map-palette-section">${sectionTitle('TILESETS & TEXTURES')}<label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>All textures · ${workspace.sprites.length}</option>${workspace.tilesets.map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · imported':''}</option>`).join('')}</select></label><p class="field-note">${!atlas?'Textures up to a cell repeat. Larger textures show their full placement while you hover and place as one free stamp.':atlas.imported?'Choose any tile to paint. Tiles fit the map’s fixed cell size.':'Choose connected autoterrain or paint individual tiles. Tiles fit the map’s fixed cell size.'}</p><div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit tileset','button outlined full-width')}</div>`:''}`;
   document.querySelectorAll('[data-map-brush]').forEach(c=>{const b=brushes.find(b=>String(b.id)===c.dataset.mapBrush),s=b.kind==='texture'?workspace.sprites.find(s=>s.id===b.assetId):null,t=b.image||(s?{...s,pixels:composite(s)}:extractTile(atlas,b.tile));paintCanvas(c,t.pixels,t.width,t.height);});
 }
 function selectedMapBrush(){
@@ -476,16 +489,28 @@ function selectedMapBrush(){
 }
 function layerRowActions(doc,l,map=false){
   const prefix=map?'map-':'',index=doc.layers.indexOf(l),id=`data-id="${l.id}"`;
-  return `<div class="layer-row-actions" role="group" aria-label="Actions for ${escape(l.name)}">${iconButton(prefix+'toggle-layer',l.visible?'eye':'hidden',l.visible?`Hide ${l.name}`:`Show ${l.name}`,id)}${iconButton(prefix+'layer-up','up','Move layer up',`${id} ${index===doc.layers.length-1?'disabled':''}`)}${iconButton(prefix+'layer-down','down','Move layer down',`${id} ${index===0?'disabled':''}`)}${!map?iconButton('duplicate-layer','copy','Duplicate layer',id):''}${iconButton('rename-layer','pencil','Rename layer',id)}${iconButton(prefix+'delete-layer','trash','Delete layer',`${id} ${doc.layers.length===1?'disabled':''}`)}</div>`;
+  return `<div class="layer-row-actions" role="group" aria-label="Actions for ${escape(l.name)}">${iconButton(prefix+'toggle-layer',l.visible?'eye':'hidden',l.visible?`Hide ${l.name}`:`Show ${l.name}`,id)}${iconButton(prefix+'layer-up','up','Move layer up',`${id} ${index===doc.layers.length-1?'disabled':''}`)}${iconButton(prefix+'layer-down','down','Move layer down',`${id} ${index===0?'disabled':''}`)}${iconButton(prefix+'merge-down','layers','Merge with layer below',`${id} ${index===0?'disabled':''}`)}${!map?iconButton('duplicate-layer','copy','Duplicate layer',id):''}${iconButton('rename-layer','pencil','Rename layer',id)}${iconButton(prefix+'delete-layer','trash','Delete layer',`${id} ${doc.layers.length===1?'disabled':''}`)}</div>`;
+}
+function mergePixelLayerDown(id){
+  const s=sprite(),index=s.layers.findIndex(l=>l.id===id),top=s.layers[index],bottom=s.layers[index-1];if(!top||!bottom)return;
+  checkpoint();
+  for(let i=0;i<bottom.pixels.length;i++)bottom.pixels[i]=blendPixel(blendPixel(0,bottom.pixels[i],bottom.visible?bottom.opacity/100:0),top.pixels[i],top.visible?top.opacity/100:0);
+  bottom.visible=bottom.visible||top.visible;bottom.opacity=100;s.layers.splice(index,1);s.activeLayerId=bottom.id;changed();renderRight();updateCanvas();
+}
+function mergeMapLayerDown(id){
+  const m=currentMap(),index=m.layers.findIndex(l=>l.id===id),top=m.layers[index],bottom=m.layers[index-1];if(!top||!bottom)return;
+  checkpoint();bottom.terrain ||= new Uint32Array(m.width*m.height);bottom.sources ||= new Uint32Array(m.width*m.height);
+  for(let i=0;i<top.cells.length;i++)if(top.cells[i]||top.terrain?.[i]){bottom.cells[i]=top.cells[i];bottom.terrain[i]=top.terrain?.[i]||0;bottom.sources[i]=top.sources?.[i]||0;}
+  bottom.decals=[...(bottom.decals||[]),...(top.decals||[])];bottom.visible=bottom.visible||top.visible;m.layers.splice(index,1);m.activeLayerId=bottom.id;resolveMapTerrain(m,bottom,workspace);changed();renderRight();updateCanvas();
 }
 function renderMapRight(){
   const m=currentMap(),active=currentMapLayer();
-  $('#right-panel').innerHTML=`<section class="panel-section preview-section">${sectionTitle('WORLD PREVIEW','<span class="live-badge">LIVE</span>')}<div class="navigator checker"><canvas id="map-navigator"></canvas></div><div class="preview-meta"><span>${m.width} × ${m.height} cells</span><span>${m.cellWidth} × ${m.cellHeight} px</span></div></section><section class="panel-section layers-section">${sectionTitle('MAP LAYERS')}<label class="range-row opacity-row"><span>Opacity</span><input id="map-opacity" type="range" min="0" max="100" value="${active.opacity}"/><output>${active.opacity}%</output></label><div class="layer-list">${[...m.layers].reverse().map(l=>`<div class="layer-row ${l.id===active.id?'active':''}"><button class="layer-pick" data-action="map-select-layer" data-id="${l.id}">${icon('layers')}<span class="layer-name">${escape(l.name)}<small>${l.cells.filter((v,i)=>v||l.terrain?.[i]===1||l.terrain?.[i]===2||l.terrain?.[i]===6).length} placed tiles</small></span></button>${layerRowActions(m,l,true)}</div>`).join('')}</div><div class="add-layer-bar">${button('map-add-layer','plus','Add layer','button outlined full-width')}</div></section><section class="panel-section">${sectionTitle('BUILD YOUR WORLD')}<p class="section-copy">Each tile is a building block. Layer paths, water, and details to make a place of your own.</p>${button('play-animation',state.animationPlaying?'minus':'arrow',state.animationPlaying?'Pause animations':'Play animations','button outlined full-width')}${button('export','download','Export tilemap','button accent full-width')}</section>`;
+  $('#right-panel').innerHTML=`<section class="panel-section preview-section">${sectionTitle('WORLD PREVIEW','<span class="live-badge">LIVE</span>')}<div class="navigator checker"><canvas id="map-navigator"></canvas></div><div class="preview-meta"><span>${m.width} × ${m.height} cells</span><span>${m.cellWidth} × ${m.cellHeight} px</span></div></section><section class="panel-section layers-section">${sectionTitle('MAP LAYERS')}<label class="range-row opacity-row"><span>Opacity</span><input id="map-opacity" type="range" min="0" max="100" value="${active.opacity}"/><output>${active.opacity}%</output></label><div class="layer-list">${[...m.layers].reverse().map(l=>`<div class="layer-row ${l.id===active.id?'active':''}"><button class="layer-pick" data-action="map-select-layer" data-id="${l.id}">${icon('layers')}<span class="layer-name">${escape(l.name)}<small>${l.cells.filter((v,i)=>v||l.terrain?.[i]===1||l.terrain?.[i]===2||l.terrain?.[i]===6).length+(l.decals?.length||0)} placed items</small></span></button>${layerRowActions(m,l,true)}</div>`).join('')}</div><div class="add-layer-bar">${button('map-add-layer','plus','Add layer','button outlined full-width')}</div></section><section class="panel-section">${sectionTitle('BUILD YOUR WORLD')}<p class="section-copy">Each tile is a building block. Layer paths, water, and details to make a place of your own.</p>${button('play-animation',state.animationPlaying?'minus':'arrow',state.animationPlaying?'Pause animations':'Play animations','button outlined full-width')}${button('export','download','Export tilemap','button accent full-width')}</section>`;
 }
 function mapPointerDown(p,e){
   const m=currentMap(),x=Math.floor(p.x/m.cellWidth),y=Math.floor(p.y/m.cellHeight),l=currentMapLayer();
   if(x<0||y<0||x>=m.width||y>=m.height)return;
-  const tool=e.button===2?'erase':state.mapTool;
+  const tool=e.button===2?'erase':state.mapTool,preview=mapDecalPreview(p);
   if(tool==='picker'||(e.ctrlKey&&e.button!==2)){
     const i=y*m.width+x,type=l.terrain?.[i]||0,source=m.sources?.[(l.sources?.[i]||0)-1];
     if(type===4||(!type&&!l.cells[i]))return;
@@ -497,6 +522,8 @@ function mapPointerDown(p,e){
   checkCapacity((l.terrain?0:m.width*m.height)+(l.sources?0:m.width*m.height)+(m.textures||!textures?0:textures.reduce((n,t)=>n+t.width*t.height,0)));
   checkpoint();if(textures)m.textures=textures;
   const brush=selectedMapBrush();
+  if(preview&&tool==='paint'){placeMapDecal(m,l,preview.x,preview.y,brush.source);changed();updateCanvas();return;}
+  if(tool==='erase'&&eraseMapDecal(l,p.x,p.y,workspace,m)){changed();updateCanvas();return;}
   if(tool==='rect'){state.drag={type:'map-rect',start:{x,y},cells:new Uint32Array(l.cells),terrain:new Uint32Array(l.terrain||m.width*m.height),sources:new Uint32Array(l.sources||m.width*m.height),brush};paintMapBrush(m,l,x,y,brush);}
   else {paintMapBrush(m,l,x,y,brush,tool);state.drag=tool==='fill'?null:{type:'map-draw',last:{x,y},tool,brush};}
   resolveMapTerrain(m,l,workspace);if(!state.drag)changed();updateCanvas();
@@ -694,6 +721,7 @@ document.addEventListener('click',async e=>{
       case 'map-add-layer':{const m=currentMap();if(m.layers.length>=16)throw new Error('A map can have up to 16 layers.');checkCapacity(m.width*m.height);checkpoint();const l=mapLayer(m.width,m.height,`Layer ${m.layers.length+1}`);m.layers.push(l);m.activeLayerId=l.id;changed();renderRight();break;}
       case 'map-delete-layer':{const m=currentMap();if(m.layers.length>1){checkpoint();const target=el.dataset.id||m.activeLayerId;m.layers=m.layers.filter(l=>l.id!==target);if(m.activeLayerId===target)m.activeLayerId=m.layers.at(-1).id;changed();renderRight();updateCanvas();}break;}
       case 'map-layer-up':case 'map-layer-down':{const m=currentMap(),i=m.layers.findIndex(l=>l.id===(el.dataset.id||m.activeLayerId)),next=i+(action==='map-layer-up'?1:-1);if(next>=0&&next<m.layers.length){checkpoint();[m.layers[i],m.layers[next]]=[m.layers[next],m.layers[i]];changed();renderRight();updateCanvas();}break;}
+      case 'map-merge-down':mergeMapLayerDown(el.dataset.id);break;
       case 'tool':state.tool=el.dataset.tool;renderLeft();positionCanvas();break;
       case 'brush':settings().brushSize=Number(el.dataset.size);changed();renderLeft();break;
       case 'dither':settings().dither=!settings().dither;changed();renderLeft();break;
@@ -746,6 +774,7 @@ document.addEventListener('click',async e=>{
       case 'delete-layer':if(sprite().layers.length>1){checkpoint();const target=el.dataset.id||sprite().activeLayerId;sprite().layers=sprite().layers.filter(l=>l.id!==target);if(sprite().activeLayerId===target)sprite().activeLayerId=sprite().layers.at(-1).id;changed();renderRight();updateCanvas();}break;
       case 'rename-layer':renameDialog(true,el.dataset.id);break;
       case 'layer-up':case 'layer-down':{const index=sprite().layers.findIndex(l=>l.id===(el.dataset.id||sprite().activeLayerId)),next=index+(action==='layer-up'?1:-1);if(next>=0&&next<sprite().layers.length){checkpoint();[sprite().layers[index],sprite().layers[next]]=[sprite().layers[next],sprite().layers[index]];changed();renderRight();updateCanvas();}break;}
+      case 'merge-down':mergePixelLayerDown(el.dataset.id);break;
       case 'open-sprite':case 'open-tileset':openDocument(el.dataset.id);break;
       case 'duplicate-sprite':{if(workspace.sprites.length>=100)throw new Error('Your workspace holds up to 100 sprites.');const original=workspace.sprites.find(s=>s.id===el.dataset.id);checkCapacity(original.width*original.height*original.layers.length);const s=cloneSprite(original),active=s.activeLayerId;s.id=uid();s.name=`${s.name} copy`;for(const l of s.layers){const old=l.id;l.id=uid();if(old===active)s.activeLayerId=l.id;}workspace.sprites.push(s);changed();libraryDialog();break;}
       case 'delete-asset':deleteAssetDialog(el.dataset.id);break;

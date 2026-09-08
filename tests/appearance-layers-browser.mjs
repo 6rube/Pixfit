@@ -3,18 +3,20 @@ import assert from 'node:assert/strict';
 import { createDemo } from '../src/demo.js';
 import { makeSprite, makeLayer, hexToColor } from '../src/core.js';
 import { makeTilemap, mapLayer } from '../src/tilemap.js';
-import { serializeWorkspace } from '../src/storage.js';
+import { serializeWorkspace, parseWorkspace } from '../src/storage.js';
 
 const w=createDemo(),sprite=makeSprite('Layer controls',16,16),bottom=sprite.layers[0],top=makeLayer(16,16,'Top');
 bottom.pixels.fill(hexToColor('#ff3300'));sprite.layers.push(top);sprite.activeLayerId=top.id;
+const large=makeSprite('Large overlay',24,20);large.layers[0].pixels.fill(hexToColor('#38a66b'));
 const map=makeTilemap('Map controls',4,4),ground=map.layers[0],details=mapLayer(4,4,'Details');map.layers.push(details);map.activeLayerId=details.id;
-w.sprites=[sprite];w.activeId=sprite.id;w.tilesets=[];w.tilemaps=[map];w.session={tabs:[sprite.id,map.id],activeTab:sprite.id,view:'pixel'};
+w.sprites=[sprite,large];w.activeId=sprite.id;w.tilesets=[];w.tilemaps=[map];w.session={tabs:[sprite.id,map.id],activeTab:sprite.id,view:'pixel'};
 const browser=await chromium.launch({...(process.env.PIXFIT_BROWSER?{executablePath:process.env.PIXFIT_BROWSER}:{channel:'chrome'}),headless:true});
 const page=await browser.newPage({viewport:{width:1440,height:1000},colorScheme:'dark'}),errors=[];
 page.on('pageerror',error=>errors.push(error.message));
 const theme=()=>page.locator('html').getAttribute('data-theme');
 const action=(name,id)=>page.locator(`[data-action="${name}"]${id?`[data-id="${id}"]`:''}`).first().click();
 const saved=()=>page.waitForFunction(()=>document.querySelector('#save-status')?.textContent.includes('All changes saved'));
+const workspace=async()=>parseWorkspace(await page.evaluate(()=>new Promise(resolve=>{const request=indexedDB.open('pixfit-studio',1);request.onsuccess=()=>{const db=request.result,get=db.transaction('workspace').objectStore('workspace').get('current');get.onsuccess=()=>{resolve(get.result);db.close();};};})));
 const rename=async(id,name)=>{await action('rename-layer',id);await page.fill('[name="name"]',name);await page.click('#dialog button[type="submit"]');};
 try{
   await page.addInitScript(data=>{if(!sessionStorage.getItem('fixture')){localStorage.setItem('pixfit-workspace',JSON.stringify(data));sessionStorage.setItem('fixture','1');}},serializeWorkspace(w));
@@ -33,11 +35,17 @@ try{
   await action('settings');await page.selectOption('#theme-setting','light');await page.keyboard.press('Escape');
   assert.deepEqual(await page.locator('#art-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data)),pixels);
   await action('delete-layer',bottom.id);assert.equal(await page.locator('.layer-row').count(),1);assert.equal(await page.locator('.layer-row.active').getAttribute('data-layer'),top.id);
+  await action('add-layer');const mergedPixel=await page.locator('.layer-row.active').getAttribute('data-layer');await action('merge-down',mergedPixel);assert.equal(await page.locator('.layer-row').count(),1);
   await action('open-tab',map.id);await rename(ground.id,'Renamed ground');assert.match(await page.locator('.layer-row.active').innerText(),/Details/);
   await action('map-layer-up',ground.id);assert.match(await page.locator('.layer-row').first().innerText(),/Renamed ground/);
-  await action('map-layer-down',ground.id);await action('settings');await page.selectOption('#theme-setting','system');await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await theme(),'dark');await page.keyboard.press('Escape');
+  await action('map-layer-down',ground.id);const activeMapLayer=await page.locator('.layer-row.active .layer-pick').getAttribute('data-id');await page.selectOption('#map-tileset','textures');await page.click(`[data-action="map-tile"][data-index="${large.id}"]`);
+  const box=await page.locator('#art-canvas').boundingBox();await page.mouse.move(box.x+box.width*.6,box.y+box.height*.55);
+  assert.ok(await page.locator('#selection-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data).some(v=>v)),'large-texture hover preview is visible');
+  await page.mouse.click(box.x+box.width*.6,box.y+box.height*.55);await saved();let current=await workspace();assert.equal(current.tilemaps[0].layers.reduce((n,l)=>n+(l.decals?.length||0),0),1);
+  await action('map-merge-down',activeMapLayer);assert.equal(await page.locator('.layer-row').count(),1);await saved();current=await workspace();assert.equal(current.tilemaps[0].layers[0].decals.length,1);
+  await action('settings');await page.selectOption('#theme-setting','system');await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await theme(),'dark');await page.keyboard.press('Escape');
   await page.screenshot({path:'.screenshots/dark-map-layers.png',fullPage:true,animations:'disabled'});
-  await action('map-delete-layer',ground.id);assert.equal(await page.locator('.layer-row').count(),1);assert.equal(await page.locator('[data-action="map-delete-layer"]').isDisabled(),true);
+  assert.equal(await page.locator('[data-action="map-delete-layer"]').isDisabled(),true);
   await saved();await page.reload();await page.locator('.library-page').waitFor();await action('settings');assert.equal(await page.locator('#theme-setting').inputValue(),'system');
-  assert.deepEqual(errors,[]);console.log('Appearance and layer controls passed: system theme changes, saved overrides, unchanged artwork, per-row rename/reorder/delete, and last-layer protection in both editors.');
+  assert.deepEqual(errors,[]);console.log('Appearance and layer controls passed: system theme changes, saved overrides, large-texture hover placement, and per-row merge controls in both editors.');
 }finally{await browser.close();}

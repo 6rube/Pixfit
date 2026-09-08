@@ -87,6 +87,13 @@ export function parseWorkspace(data) {
     }
     const layers=m.layers.map(l=>{
       const cells=decode(l.cells,width*height),result={id:id(l.id),name:name(l.name),visible:l.visible!==false,opacity:Number.isFinite(l.opacity)?Math.max(0,Math.min(100,l.opacity)):100,cells};
+      if(l.decals!==undefined){
+        if(!Array.isArray(l.decals)||l.decals.length>4096)throw new Error('Invalid map texture placements.');
+        result.decals=l.decals.map(d=>{
+          if(!d||!Number.isInteger(d.source)||d.source<1||d.source>(sources?.length||0)||sources[d.source-1]?.kind!=='texture'||!Number.isInteger(d.x)||!Number.isInteger(d.y)||d.x<-512||d.y<-512||d.x>=width*cellWidth||d.y>=height*cellHeight)throw new Error('Invalid map texture placement.');
+          return {source:d.source,x:d.x,y:d.y};
+        });
+      }
       if(l.sources!==undefined){result.sources=decode(l.sources,width*height);if(result.sources.some(v=>v>(sources?.length||0)))throw new Error('Invalid map source index.');}
       if(l.terrain!==undefined)result.terrain=decode(l.terrain,width*height);
       for(let i=0;i<cells.length;i++){

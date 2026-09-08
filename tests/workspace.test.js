@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSprite, hexToColor, uid, shapeSelection } from '../src/core.js';
 import { buildTileset, tileDescriptors, extractTile, transformImage, transformMask, selectionClipboard, pastePixels, animatedTileIndex } from '../src/tiles.js';
-import { makeTilemap, paintMap, paintTerrain, resolveTerrain, resolveMapTerrain, paintMapBrush, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
+import { makeTilemap, paintMap, paintTerrain, resolveTerrain, resolveMapTerrain, paintMapBrush, placeMapDecal, eraseMapDecal, renderTilemap, resizeTilemap, mapLayer } from '../src/tilemap.js';
 import { serializeWorkspace, parseWorkspace, cleanTile } from '../src/storage.js';
 import { createDemo } from '../src/demo.js';
 import { godotPackage, zipFiles } from '../src/godot.js';
@@ -132,6 +132,17 @@ test('texture-only maps need no generated tileset',()=>{
   m.sources=[{kind:'texture',assetId:w.sprites[0].id}];paintMapBrush(m,m.layers[0],0,0,{source:1,kind:'texture'},'fill');
   const restored=parseWorkspace(JSON.parse(JSON.stringify(serializeWorkspace(w))));
   assert.equal(restored.tilemaps[0].tilesetId,null);assert.deepEqual(renderTilemap(m,w),renderTilemap(restored.tilemaps[0],restored));
+});
+
+test('large texture decals use free pixel positions, composite correctly, and survive saves',()=>{
+  const w=createDemo(),texture=makeSprite('Large texture',3,2),m=makeTilemap('Decals',3,2),l=m.layers[0];
+  texture.layers[0].pixels.set([red,0,blue,yellow,red,blue]);w.sprites=[texture];w.tilesets=[];w.tilemaps=[m];
+  m.sources=[{kind:'texture',assetId:texture.id}];placeMapDecal(m,l,0,0,1);
+  assert.deepEqual(l.decals,[{source:1,x:0,y:0}]);
+  const frame=renderTilemap(m,w);assert.equal(frame.pixels[0],red);assert.equal(frame.pixels[1],0);assert.equal(frame.pixels[48],yellow);
+  assert.ok(eraseMapDecal(l,1,1,w,m));assert.equal(l.decals.length,0);placeMapDecal(m,l,0,0,1);
+  const restored=parseWorkspace(JSON.parse(JSON.stringify(serializeWorkspace(w))));assert.deepEqual(restored.tilemaps[0].layers[0].decals,l.decals);assert.deepEqual(renderTilemap(restored.tilemaps[0],restored),renderTilemap(m,w));
+  const invalid=serializeWorkspace(w);invalid.tilemaps[0].layers[0].decals[0].source=0;assert.throws(()=>parseWorkspace(invalid));
 });
 test('version 2 backups preserve open tabs, maps, animations, slopes and paste preferences',()=>{
   const w=createDemo(),t=atlas({slopes1:true,slopes2:true,overrides:{2:{rotation:180,cutoff:1,flipY:true}}});t.animations={0:{frames:[0,1],fps:12}};w.tilesets=[t];w.tilemaps=[makeTilemap('World',4,4,t)];paintMap(w.tilemaps[0],w.tilemaps[0].layers[0],2,2,15);
