@@ -4,7 +4,7 @@ A Pixelart toolset.
 The tools are all run locally.
 You can use the app by just visiting: [6rube.github.io/Pixfit/](6rube.github.io/Pixfit/)
 
-![til](https://raw.githubusercontent.com/6rube/media/pixeleditor.gif)
+![til](https://raw.githubusercontent.com/6rube/Pixfit/refs/heads/main/media/pixeleditor.gif)
 
 The main tools are:
 - Pixeleditor
