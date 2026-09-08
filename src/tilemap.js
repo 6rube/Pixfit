@@ -35,13 +35,14 @@ export function paintTerrain(map,layer,atlas,x,y,brush,tool='paint') {
     for(let i=0;i<cells.length;i++)if(cells[i]===9)layer.terrain[i]=value;
   }else layer.terrain[y*map.width+x]=value;
 }
-export function resolveTerrain(map,layer,atlas,sourceIndex=0) {
+export function resolveTerrain(map,layer,atlas,sourceIndex=0,bounds=null) {
   if(!layer.terrain||atlas.imported)return;
   const lookup=new Map(tileDescriptors(atlas).filter(t=>t.kind==='terrain').map(t=>[t.mask,t.id+1]));
   const belongs=i=>(layer.sources?.[i]||0)===sourceIndex;
   const inner=(x,y)=>x>=0&&y>=0&&x<map.width&&y<map.height&&belongs(y*map.width+x)&&[1,3].includes(layer.terrain[y*map.width+x]);
   const auto=(x,y)=>x>=0&&y>=0&&x<map.width&&y<map.height&&belongs(y*map.width+x)&&layer.terrain[y*map.width+x]===3;
-  for(let y=0;y<map.height;y++)for(let x=0;x<map.width;x++){
+  const area=bounds||{x0:0,y0:0,x1:map.width-1,y1:map.height-1};
+  for(let y=area.y0;y<=area.y1;y++)for(let x=area.x0;x<=area.x1;x++){
     const i=y*map.width+x,type=layer.terrain[i];
     const empty=type===4||(type===0&&!layer.cells[i]);
     if(!belongs(i)&&!empty)continue;
@@ -68,11 +69,14 @@ export function mapSource(map,index,assets) {
   const source=map.sources?.[index-1];
   return index?assets[source?.kind==='texture'?'sprites':'tilesets'].find(a=>a.id===source?.assetId):assets.tilesets.find(a=>a.id===map.tilesetId);
 }
-export function resolveMapTerrain(map,layer,assets) {
+export function resolveMapTerrain(map,layer,assets,bounds=null) {
   if(!layer.terrain)return;
-  for(let i=0;i<layer.cells.length;i++)if(layer.terrain[i]===5){layer.terrain[i]=4;layer.cells[i]=0;if(layer.sources)layer.sources[i]=0;}
-  const indices=new Set([0,...(layer.sources||[])]);
-  for(const index of indices){const atlas=mapSource(map,index,assets);if(atlas?.kind==='tileset')resolveTerrain(map,layer,atlas,index);}
+  const area=bounds||{x0:0,y0:0,x1:map.width-1,y1:map.height-1};
+  for(let y=area.y0;y<=area.y1;y++)for(let x=area.x0;x<=area.x1;x++){const i=y*map.width+x;if(layer.terrain[i]===5){layer.terrain[i]=4;layer.cells[i]=0;if(layer.sources)layer.sources[i]=0;}}
+  const indices=new Set([0]);
+  for(let i=0;i<layer.cells.length;i++)if(layer.terrain[i]!==5)indices.add(layer.sources?.[i]||0);
+  // Source priority must not change when a stroke adds an earlier map cell.
+  for(const index of [...indices].sort((a,b)=>a-b)){const atlas=mapSource(map,index,assets);if(atlas?.kind==='tileset')resolveTerrain(map,layer,atlas,index,area);}
 }
 export function paintMapBrush(map,layer,x,y,brush,tool='paint') {
   if(x<0||y<0||x>=map.width||y>=map.height)return;
@@ -126,56 +130,89 @@ export function eraseMapDecal(layer,x,y,assets,map) {
   }
   return false;
 }
-export function renderTilemap(map,atlas,time=0) {
+// A region uses pixel coordinates. Draw every overlapping layer and multi-cell
+// tile, including anchors outside the region, so partial redraws equal a full render.
+export function renderTilemap(map,atlas,time=0,region=null) {
   const assets=atlas?.tilesets?atlas:{tilesets:atlas?[atlas]:[],sprites:[]};
-  const width=map.width*map.cellWidth,height=map.height*map.cellHeight,pixels=new Uint32Array(width*height);
+  const fullWidth=map.width*map.cellWidth,fullHeight=map.height*map.cellHeight;
+  const left=region?.x||0,top=region?.y||0,width=region?.width??fullWidth,height=region?.height??fullHeight;
+  const right=left+width,bottom=top+height,pixels=new Uint32Array(width*height);
+  const sprites=new Map(assets.sprites.map(s=>[s.id,s])),atlases=new Map(assets.tilesets.map(t=>[t.id,t]));
+  const sources=[atlases.get(map.tilesetId),...(map.sources||[]).map(s=>(s.kind==='texture'?sprites:atlases).get(s.assetId))];
   const cache=new Map(),textureCache=new Map(),descriptorCache=new Map();
-  for(const layer of map.layers) {
-    if(!layer.visible||!layer.opacity)continue;
-    for(let y=0;y<map.height;y++)for(let x=0;x<map.width;x++) {
-      const cell=y*map.width+x,sourceIndex=layer.sources?.[cell]||0;
-      const atlas=mapSource(map,sourceIndex,assets),material=layer.terrain?.[cell];
-      if(material===7&&atlas?.kind==='sprite'){
-        const key=`${atlas.id}:texture:${layer.cells[cell]}`;
-        if(!textureCache.has(atlas.id))textureCache.set(atlas.id,{...atlas,pixels:composite(atlas)});
-        if(!cache.has(key))cache.set(key,textureTile(atlas,map.cellWidth,map.cellHeight,layer.cells[cell]-1,textureCache.get(atlas.id).pixels));
-        const tile=cache.get(key);
-        for(let py=0;py<map.cellHeight;py++)for(let px=0;px<map.cellWidth;px++){
-          const i=(y*map.cellHeight+py)*width+x*map.cellWidth+px;pixels[i]=blendPixel(pixels[i],tile.pixels[py*map.cellWidth+px],layer.opacity/100);
-        }
-        continue;
-      }
-      let source=(material===1||material===2)&&!layer.cells[cell]&&!sourceIndex?map.textures?.[material-1]:null;
-      const sprite=material===6?atlas:!source&&(material===1||material===2)&&!layer.cells[cell]?assets.sprites.find(s=>s.id===atlas?.options?.[material===1?'terrainA':'terrainB']):null;
-      if(sprite){if(!textureCache.has(sprite.id))textureCache.set(sprite.id,{...sprite,pixels:composite(sprite)});source=textureCache.get(sprite.id);}
-      if(source){
-        for(let py=0;py<map.cellHeight;py++)for(let px=0;px<map.cellWidth;px++){
-          const color=source.pixels[((y*map.cellHeight+py)%source.height)*source.width+(x*map.cellWidth+px)%source.width];
-          const i=(y*map.cellHeight+py)*width+x*map.cellWidth+px;pixels[i]=blendPixel(pixels[i],color,layer.opacity/100);
-        }
-        continue;
-      }
-      if(!atlas||atlas.kind==='sprite')continue;
-      if(!descriptorCache.has(atlas.id))descriptorCache.set(atlas.id,tileDescriptors(atlas));
-      const descriptors=descriptorCache.get(atlas.id),id=layer.cells[cell]-1;if(id<0||!descriptors[id])continue;
-      const frame=animatedTileIndex(atlas,id,time);
-      const key=`${atlas.id}:${frame}`;if(!cache.has(key))cache.set(key,extractTile(atlas,frame));const tile=cache.get(key);
-      const targetWidth=descriptors[id].spanX*map.cellWidth,targetHeight=descriptors[id].spanY*map.cellHeight;
-      for(let py=0;py<targetHeight&&y*map.cellHeight+py<height;py++)for(let px=0;px<targetWidth&&x*map.cellWidth+px<width;px++){
-        const src=tile.pixels[Math.floor(py*tile.height/targetHeight)*tile.width+Math.floor(px*tile.width/targetWidth)];
-        const i=(y*map.cellHeight+py)*width+x*map.cellWidth+px;pixels[i]=blendPixel(pixels[i],src,layer.opacity/100);
+  let spanX=1,spanY=1;
+  for(const source of sources)if(source&&source.kind!=='sprite'&&!descriptorCache.has(source.id)){
+    const tiles=tileDescriptors(source);descriptorCache.set(source.id,tiles);
+    for(const tile of tiles){spanX=Math.max(spanX,tile.spanX);spanY=Math.max(spanY,tile.spanY);}
+  }
+  const texture=s=>{
+    if(!textureCache.has(s.id))textureCache.set(s.id,{...s,pixels:composite(s)});
+    return textureCache.get(s.id);
+  };
+  const blit=(image,dx,dy,targetWidth,targetHeight,opacity)=>{
+    const x0=Math.max(left,dx),y0=Math.max(top,dy),x1=Math.min(right,dx+targetWidth),y1=Math.min(bottom,dy+targetHeight);
+    if(x0>=x1||y0>=y1)return;
+    const native=image.width===targetWidth&&image.height===targetHeight;
+    image.opaque??=image.pixels.every(p=>(p&255)===255);
+    for(let y=y0;y<y1;y++){
+      const sy=Math.floor((y-dy)*image.height/targetHeight),dest=(y-top)*width+x0-left;
+      if(native&&image.opaque&&opacity===1){pixels.set(image.pixels.subarray(sy*image.width+x0-dx,sy*image.width+x1-dx),dest);continue;}
+      for(let x=x0;x<x1;x++){
+        const color=image.pixels[sy*image.width+Math.floor((x-dx)*image.width/targetWidth)],i=dest+x-x0;
+        pixels[i]=blendPixel(pixels[i],color,opacity);
       }
     }
-    for(const decal of layer.decals||[]) {
-      const image=mapSource(map,decal.source,assets);if(!image||image.kind!=='sprite')continue;
-      if(!textureCache.has(image.id))textureCache.set(image.id,{...image,pixels:composite(image)});const source=textureCache.get(image.id);
-      for(let py=0;py<source.height;py++)for(let px=0;px<source.width;px++){
-        const dx=decal.x+px,dy=decal.y+py;if(dx<0||dy<0||dx>=width||dy>=height)continue;
-        const i=dy*width+dx;pixels[i]=blendPixel(pixels[i],source.pixels[py*source.width+px],layer.opacity/100);
+  };
+  const x0=Math.max(0,Math.floor(left/map.cellWidth)-spanX+1),y0=Math.max(0,Math.floor(top/map.cellHeight)-spanY+1);
+  const x1=Math.min(map.width,Math.ceil(right/map.cellWidth)),y1=Math.min(map.height,Math.ceil(bottom/map.cellHeight));
+  for(const layer of map.layers){
+    if(!layer.visible||!layer.opacity)continue;
+    const opacity=layer.opacity/100;
+    for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+      const cell=y*map.width+x,material=layer.terrain?.[cell];
+      if(!layer.cells[cell]&&![1,2,6].includes(material))continue;
+      const sourceIndex=layer.sources?.[cell]||0,atlas=sources[sourceIndex],dx=x*map.cellWidth,dy=y*map.cellHeight;
+      if(material===7&&atlas?.kind==='sprite'){
+        const key=`${sourceIndex}:texture:${layer.cells[cell]}`;
+        if(!cache.has(key))cache.set(key,textureTile(atlas,map.cellWidth,map.cellHeight,layer.cells[cell]-1,texture(atlas).pixels));
+        blit(cache.get(key),dx,dy,map.cellWidth,map.cellHeight,opacity);continue;
       }
+      let source=(material===1||material===2)&&!layer.cells[cell]&&!sourceIndex?map.textures?.[material-1]:null;
+      const sprite=material===6?atlas:!source&&(material===1||material===2)&&!layer.cells[cell]?sprites.get(atlas?.options?.[material===1?'terrainA':'terrainB']):null;
+      if(sprite)source=texture(sprite);
+      if(source){
+        for(let py=Math.max(top,dy);py<Math.min(bottom,dy+map.cellHeight);py++)for(let px=Math.max(left,dx);px<Math.min(right,dx+map.cellWidth);px++){
+          const color=source.pixels[(py%source.height)*source.width+px%source.width],i=(py-top)*width+px-left;
+          pixels[i]=blendPixel(pixels[i],color,opacity);
+        }
+        continue;
+      }
+      const descriptors=descriptorCache.get(atlas?.id),id=layer.cells[cell]-1;
+      if(!descriptors?.[id])continue;
+      const frame=animatedTileIndex(atlas,id,time),key=`${sourceIndex}:${frame}`;
+      if(!cache.has(key))cache.set(key,extractTile(atlas,frame));
+      blit(cache.get(key),dx,dy,descriptors[id].spanX*map.cellWidth,descriptors[id].spanY*map.cellHeight,opacity);
+    }
+    for(const decal of layer.decals||[]){
+      const image=sources[decal.source];if(!image||image.kind!=='sprite')continue;
+      if(decal.x>=right||decal.y>=bottom||decal.x+image.width<=left||decal.y+image.height<=top)continue;
+      blit(texture(image),decal.x,decal.y,image.width,image.height,opacity);
     }
   }
   return {width,height,pixels};
+}
+// Only animations actually placed on visible layers can invalidate the map.
+export function mapAnimationCells(map,assets){
+  const sources=[mapSource(map,0,assets),...(map.sources||[]).map((_,i)=>mapSource(map,i+1,assets))];
+  if(!sources.some(s=>s?.kind==='tileset'&&Object.keys(s.animations||{}).length))return [];
+  const result=[],descriptors=new Map();
+  for(const layer of map.layers)if(layer.visible&&layer.opacity)for(let i=0;i<layer.cells.length;i++){
+    const atlas=sources[layer.sources?.[i]||0],id=layer.cells[i]-1;
+    if(!atlas?.animations?.[id]||layer.terrain?.[i]===7)continue;
+    if(!descriptors.has(atlas))descriptors.set(atlas,tileDescriptors(atlas));
+    const tile=descriptors.get(atlas)[id];if(tile)result.push({atlas,id,x0:i%map.width,y0:Math.floor(i/map.width),x1:i%map.width+tile.spanX-1,y1:Math.floor(i/map.width)+tile.spanY-1});
+  }
+  return result;
 }
 export function resizeTilemap(map,width,height) {
   validateMapSize(width,height,map.cellWidth,map.cellHeight);

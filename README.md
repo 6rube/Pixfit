@@ -43,6 +43,14 @@ For a 32×32 border sprite with transparent padding, choose **Transition texture
 
 Under **Placement, repeat & padding**, position the strip inside, outside, or centered on the edge; adjust its offset, pixel scale, repeat length, phase, and rotation. Leave **Trim fully transparent rows** off for intentional half-transparent padding. Enable it with **Fit image to border width** when only the visible artwork should fill a narrow band. Transparency reveals the underlying terrain. The same controls are available in the tile inspector for individual overrides, and settings survive workspace backups. Existing terrains keep their previous fitted-border behavior.
 
+### Texture categories
+
+Click the category button on a texture's Library card, or **Texture category** in its pixel editor, to assign an existing category or create one by name. A blank name means **Uncategorized**. Categories survive duplication, workspace backups, and merges.
+
+Use **Texture category** in the auto terrain editor to filter inner, outer, and border texture choices. Current texture assignments remain selected when switching categories. In the tilemap editor, the same filter shows matching texture sheets, saved patterns, and terrains using those textures. **All categories** restores the complete list; changing the filter does not change painted cells.
+
+Tilemap painting batches redraws per browser frame, skips repeated moves within one cell, and resolves terrain only around edited cells. Partial image updates include overlapping slopes, decals, and layers. Grid and brush previews are reused, and only animations placed on visible layers trigger redraws. PNG exports still render the complete image.
+
 ## Run locally
 
 Install Node.js 22 or newer, then:
@@ -70,6 +78,7 @@ npm install --no-save --package-lock=false playwright
 node tests/browser.mjs
 node tests/patterns-browser.mjs
 node tests/border-textures-browser.mjs
+node tests/categories-performance-browser.mjs
 ```
 
 The browser check exercises editing, clipboard destinations, Ctrl picking, tabs, the full-page library, map painting/fill/layers, tile overrides, slopes, animation configuration, reload persistence, full backup restore, Godot downloads, PNG import/export, 512 pixel canvases, and narrow layouts. Screenshots and test exports are written to the ignored `.screenshots/` directory.
@@ -86,6 +95,7 @@ The patterns browser check covers collections, combined Godot downloads, mixed t
 | `src/tilemap.js` | Map layers, painting, fill, resize, and rendering |
 | `src/godot.js` | Godot 4 resource generation, animation sheets, and ZIP packaging |
 | `src/storage.js` | IndexedDB/Local Storage, lossless serialization, validated restore |
+| `src/categories.js` | Texture category names and filtering |
 | `src/demo.js` | Original editable starter artwork and built-in palettes |
 | `src/styles.css` | Responsive editor, library, and dialogs |
 | `src/workspace.css` | Document tabs, full-page library, tile inspector, map tools |

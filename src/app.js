@@ -2,9 +2,10 @@ import { uid, clamp, rgba, colorToHex, hexToColor, makeSprite, makeLayer, cloneS
 import { loadWorkspace, saveWorkspace, serializeWorkspace, parseWorkspace, workspacePixelCount, MAX_WORKSPACE_PIXELS } from './storage.js';
 import { createDemo, PALETTES } from './demo.js';
 import { MAX_PALETTES, validatePalette, importPalette, exportPalette } from './palettes.js';
+import { cleanCategory, textureCategories, texturesInCategory } from './categories.js';
 import { icon } from './icons.js';
 import { buildTileset, borderTextureImage, tileDescriptors, extractTile, transformImage, packTiles, animatedTileIndex, selectionClipboard, pastePixels, transformSelection, blendPixel } from './tiles.js';
-import { makeTilemap, mapLayer, paintMapBrush, textureTiles, textureTile, eraseMapDecal, resolveMapTerrain, renderTilemap, resizeTilemap } from './tilemap.js';
+import { makeTilemap, mapLayer, paintMapBrush, textureTiles, textureTile, eraseMapDecal, resolveMapTerrain, renderTilemap, mapAnimationCells, resizeTilemap } from './tilemap.js';
 import { godotCollectionPackage, zipFiles } from './godot.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -44,13 +45,13 @@ function openDocument(id) {
   saveTabView();state.view=assetView(doc);state.selection=null;state.cursor=null;
   if(doc.kind==='sprite')workspace.activeId=id;
   if(doc.kind==='tileset'){state.tile=doc;settings().tile=structuredClone(doc.options);state.selectedTile=0;}
-  if(doc.kind==='tilemap'){state.mapId=id;state.mapSourceId=doc.tilesetId||'textures';state.mapTile=3;state.textureSelection=null;state.mapCollectionId='';}
+  if(doc.kind==='tilemap'){state.mapCategory='*';state.mapId=id;state.mapSourceId=doc.tilesetId||'textures';state.mapTile=3;state.textureSelection=null;state.mapCollectionId='';}
   rememberTab(doc);closeDialog();changed();render();
   const view=state.tabViews.get(id);if(view){state.zoom=view.zoom;state.pan=view.pan;state.selection=view.selection;positionCanvas();}else fitCanvas();
 }
 function checkCapacity(additionalPixels) { if (workspacePixelCount(workspace) + additionalPixels > MAX_WORKSPACE_PIXELS) throw new Error('This workspace can hold 32 million pixels across all layers and atlases. Export a backup and remove an unused asset to make room.'); }
 const history = () => { const id=activeDocument()?.id||sprite().id;if (!state.history.has(id)) state.history.set(id, { undo: [], redo: [] }); return state.history.get(id); };
-const texture = document.createElement('canvas'), repeatTexture = document.createElement('canvas'), mapPreviewTexture=document.createElement('canvas');
+const texture = document.createElement('canvas'), repeatTexture = document.createElement('canvas'), mapPreviewTexture=document.createElement('canvas'),mapGridTexture=document.createElement('canvas');
 let toastTimer;
 function toast(message, error = false) {
   const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`;
@@ -211,6 +212,7 @@ function renderRight() {
   const s = sprite(), active = layer();
   $('#right-panel').innerHTML = `
     <section class="panel-section preview-section">${sectionTitle('NAVIGATOR','<span class="live-badge">LIVE</span>')}<div class="navigator checker"><canvas id="navigator" aria-label="Artwork preview"></canvas></div><label class="checkbox-row repeat-preview-toggle"><input id="sprite-repeat-preview" type="checkbox" ${state.spriteRepeatPreview?'checked':''}/>Preview as repeating pattern</label><div class="preview-meta"><span>${s.width} × ${s.height} px</span><span>RGBA</span></div></section>
+    <section class="panel-section">${sectionTitle('TEXTURE CATEGORY')}${button('texture-category','folder',s.category||'Uncategorized','button outlined full-width',`data-id="${s.id}"`)}</section>
     <section class="panel-section layers-section">${sectionTitle('LAYERS',`<span class="subtle">${s.layers.length} layers</span>`)}
 
       <label class="range-row opacity-row"><span>Opacity</span><input id="opacity" type="range" min="0" max="100" value="${active.opacity}" aria-label="Layer opacity"/><output id="opacity-output">${active.opacity}%</output></label>
@@ -256,9 +258,9 @@ function drawBorderTexturePreviews(){
 function renderTilesLeft() {
   rememberBorderDetails();
   const opts = settings().tile;
-  const source = (key, title, letter) => `<label class="source-label"><span><i>${letter}</i>${title}</span><select id="${key}" aria-label="${title}">${key === 'terrainB' ? '<option value="">Transparent</option>' : ''}${workspace.sprites.map(s => `<option value="${s.id}" ${s.id === opts[key] ? 'selected' : ''}>${escape(s.name)} (${s.width} × ${s.height})</option>`).join('')}</select></label>`;
+  const source = (key, title, letter) => `<label class="source-label"><span><i>${letter}</i>${title}</span><select id="${key}" aria-label="${title}">${key === 'terrainB' ? '<option value="">Transparent</option>' : ''}${spriteOptions(opts[key])}</select></label>`;
   $('#left-panel').innerHTML = `
-    <section class="panel-section">${sectionTitle('TERRAIN SOURCES','<span class="key-hint">01</span>')}<p class="section-copy">Mix two textures. We’ll take care of the connections.</p>${source('terrainA','Inner terrain','A')}${source('terrainB','Outer terrain','B')}<div class="terrain-samples"><div class="checker"><canvas id="terrain-a-preview"></canvas><span>Inside</span></div>${icon('swap')}<div class="checker"><canvas id="terrain-b-preview"></canvas><span>${opts.terrainB ? 'Outside' : 'Transparent'}</span></div></div>${button('import-terrain','upload','Import texture','text-button')}</section>
+    <section class="panel-section">${sectionTitle('TERRAIN SOURCES','<span class="key-hint">01</span>')}<p class="section-copy">Mix two textures. We’ll take care of the connections.</p>${categoryFilter('terrain-category','terrain')}${source('terrainA','Inner terrain','A')}${source('terrainB','Outer terrain','B')}<div class="terrain-samples"><div class="checker"><canvas id="terrain-a-preview"></canvas><span>Inside</span></div>${icon('swap')}<div class="checker"><canvas id="terrain-b-preview"></canvas><span>${opts.terrainB ? 'Outside' : 'Transparent'}</span></div></div>${button('import-terrain','upload','Import texture','text-button')}</section>
     <section class="panel-section">${sectionTitle('TILE CONFIGURATION','<span class="key-hint">02</span>')}<label class="field-label">Tile size<select id="tile-size">${[8,16,32,64].map(n=>`<option value="${n}" ${opts.size===n?'selected':''}>${n} × ${n} pixels</option>`).join('')}</select></label><label class="field-label">Compositing mode<select id="tile-mode"><option value="wang" ${opts.mode==='wang'?'selected':''}>16 tiles · Corner terrain</option><option value="blob" ${opts.mode==='blob'?'selected':''}>47 tiles · Blob autotile</option></select></label><label class="field-label">Atlas columns<select id="tile-columns">${[4,8,16].map(n=>`<option value="${n}" ${opts.columns===n?'selected':''}>${n} columns</option>`).join('')}</select></label></section>
     <section class="panel-section">${sectionTitle('TRANSITION BORDER','<span class="key-hint">03</span>')}<label class="field-label">Border type<select id="tile-border-type">${['none','dither','texture'].map(type=>`<option value="${type}" ${(opts.borderType||'dither')===type?'selected':''}>${{none:'Hard edge',dither:'Dithered blend',texture:'Transition texture'}[type]}</option>`).join('')}</select></label>${(opts.borderType==='texture')?`<label class="field-label">Transition texture<select id="tile-border-texture"><option value="">Choose a sprite…</option>${spriteOptions(opts.borderTexture)}</select></label>${borderTextureControls(opts)}`:''}<label class="range-row"><span>Border width</span><input id="tile-border" ${opts.borderType==='texture'&&opts.borderMapping==='native'?'disabled':''} type="range" min="0" max="${opts.size}" value="${opts.border}"/><output>${opts.borderType==='texture'&&opts.borderMapping==='native'?'native':opts.border+' px'}</output></label><label class="field-label">Cutoff / inset (pixels)<input id="tile-cutoff" type="number" min="-${opts.size}" max="${opts.size}" value="${opts.cutoff||0}"/></label><p class="field-note">Positive cutoff shrinks the inner terrain. Negative values expand it.</p></section>
     <section class="panel-section">${sectionTitle('SHAPES & PROJECTION')}<label class="checkbox-row"><input id="tile-slopes1" type="checkbox" ${opts.slopes1?'checked':''}/>Generate 1 × 1 slopes</label><label class="checkbox-row"><input id="tile-slopes2" type="checkbox" ${opts.slopes2?'checked':''}/>Generate 1 × 2 slopes</label><p class="field-note">Four directions per slope size. Rotate a tall slope to make it wide.</p><button data-action="tile-iso" class="toggle-row" aria-pressed="${opts.isometric}"><span>${icon('iso')}Isometric projection</span><span class="switch ${opts.isometric?'on':''}"></span></button><button data-action="tile-gap" class="toggle-row" aria-pressed="${opts.gap}"><span>${icon('grid')}1 px tile spacing</span><span class="switch ${opts.gap?'on':''}"></span></button></section>
@@ -274,7 +276,32 @@ function renderTilesRight() {
     <section class="panel-section">${sectionTitle('YOUR AUTO TERRAIN')}<dl class="spec-list"><div><dt>${t.imported?'Tiles imported':'Tiles generated'}</dt><dd>${t.masks.length}</dd></div><div><dt>Atlas size</dt><dd>${t.width} × ${t.height}</dd></div><div><dt>Projection</dt><dd>${t.imported?'Original image':settings().tile.isometric?'Isometric':'Orthogonal'}</dd></div><div><dt>Animations</dt><dd>${Object.keys(t.animations||{}).length}</dd></div></dl>${button('godot-export','download','Export to Godot 4','button accent full-width')}</section>`;
   drawTilePreview();drawBorderTexturePreviews();
 }
-function spriteOptions(selected){return workspace.sprites.map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${escape(s.name)}</option>`).join('');}
+function currentCategory(context){
+  const category=state[context+'Category']??'*';
+  return category==='*'||category===''||textureCategories(workspace.sprites).includes(category)?category:'*';
+}
+function categoryFilter(id,context){
+  const value=currentCategory(context);
+  return `<label class="field-label texture-category-filter">Texture category<select id="${id}"><option value="*" ${value==='*'?'selected':''}>All categories</option><option value="" ${value===''?'selected':''}>Uncategorized</option>${textureCategories(workspace.sprites).map(c=>`<option value="${escape(c)}" ${value===c?'selected':''}>${escape(c)}</option>`).join('')}</select></label>`;
+}
+function spriteOptions(selected,category=state.view==='tiles'?currentCategory('terrain'):'*',pin=true){
+  const visible=texturesInCategory(workspace.sprites,category),current=workspace.sprites.find(s=>s.id===selected),outside=current&&!visible.includes(current);
+  return [...(pin&&outside?[current]:[]),...visible].map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${escape(s.name)}${pin&&outside&&s===current?' · current selection':''}</option>`).join('');
+}
+function textureCategoryDialog(id){
+  const texture=workspace.sprites.find(s=>s.id===id);if(!texture)return;
+  showDialog('Texture category',texture.name,`<label class="field-label">Category<input name="category" type="text" list="texture-categories" maxlength="48" value="${escape(texture.category||'')}" placeholder="e.g. Forest, Water, Buildings"/></label><datalist id="texture-categories">${textureCategories(workspace.sprites).map(c=>`<option value="${escape(c)}"></option>`).join('')}</datalist><p class="field-note">Choose an existing category or type a new one. Leave blank for Uncategorized.</p>`,'Save category',data=>{
+    if(state.view==='pixel'&&sprite().id===id)checkpoint();
+    const category=cleanCategory(data.get('category'));if(category)texture.category=category;else delete texture.category;
+    texture.updatedAt=Date.now();changed();closeDialog();if(state.view==='library')renderLibraryPage();else renderRight();
+  });
+}
+function mapTextureChoices(){return texturesInCategory(workspace.sprites,currentCategory('map'));}
+function mapAtlasChoices(){
+  const category=currentCategory('map'),textureIds=new Set(mapTextureChoices().map(s=>s.id)),collection=workspace.collections.find(c=>c.id===state.mapCollectionId);
+  return workspace.tilesets.filter(t=>(!collection||collection.terrainIds.includes(t.id))&&(category==='*'||textureIds.has(t.options.terrainA)||textureIds.has(t.options.terrainB)));
+}
+
 function paintCanvas(canvas, pixels, width, height) {
   if (!canvas) return;
   canvas.width = width; canvas.height = height;
@@ -310,11 +337,46 @@ function regenerate() {
   state.selectedTile=Math.min(state.selectedTile,state.tile.masks.length-1);
 }
 function dimensions() { return state.view==='pixel'?sprite():state.view==='map'?{width:currentMap().width*currentMap().cellWidth,height:currentMap().height*currentMap().cellHeight}:state.tile; }
+let pendingMapPaint=null,mapPaintFrame=0;
+const unionBounds=(a,b)=>a?{x0:Math.min(a.x0,b.x0),y0:Math.min(a.y0,b.y0),x1:Math.max(a.x1,b.x1),y1:Math.max(a.y1,b.y1)}:{...b};
+function mapSpans(){
+  const m=currentMap(),ids=new Set([m.tilesetId,...(m.sources||[]).map(s=>s.assetId)]);let x=1,y=1;
+  for(const atlas of workspace.tilesets)if(ids.has(atlas.id))for(const tile of tileDescriptors(atlas)){x=Math.max(x,tile.spanX);y=Math.max(y,tile.spanY);}
+  return {x,y};
+}
+function drawMapNavigator(){
+  const canvas=$('#map-navigator'),art=$('#art-canvas');if(!canvas||!art)return;
+  const scale=Math.min(1,220/art.width,170/art.height),width=Math.max(1,Math.round(art.width*scale)),height=Math.max(1,Math.round(art.height*scale));
+  if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+  const ctx=canvas.getContext('2d');ctx.clearRect(0,0,width,height);ctx.imageSmoothingEnabled=false;ctx.drawImage(art,0,0,width,height);
+}
+function drawMapRegion(bounds){
+  const m=currentMap(),art=$('#art-canvas');if(!art||!state.mapFrame)return;
+  const x=Math.max(0,bounds.x0)*m.cellWidth,y=Math.max(0,bounds.y0)*m.cellHeight;
+  const width=(Math.min(m.width-1,bounds.x1)+1)*m.cellWidth-x,height=(Math.min(m.height-1,bounds.y1)+1)*m.cellHeight-y;if(width<=0||height<=0)return;
+  const patch=renderTilemap(m,workspace,state.animationPlaying?performance.now()/1000:0,{x,y,width,height});
+  for(let row=0;row<height;row++)state.mapFrame.pixels.set(patch.pixels.subarray(row*width,(row+1)*width),(y+row)*state.mapFrame.width+x);
+  art.getContext('2d').putImageData(new ImageData(imageBytes(patch.pixels),width,height),x,y);
+  drawMapNavigator();drawOverlay();
+}
+function queueMapPaint(map,layer,bounds){
+  if(pendingMapPaint&&(pendingMapPaint.map!==map||pendingMapPaint.layer!==layer))flushMapPaint();
+  pendingMapPaint={map,layer,bounds:unionBounds(pendingMapPaint?.bounds,bounds)};
+  if(!mapPaintFrame)mapPaintFrame=requestAnimationFrame(()=>flushMapPaint());
+}
+function flushMapPaint(draw=true){
+  if(mapPaintFrame){cancelAnimationFrame(mapPaintFrame);mapPaintFrame=0;}
+  const pending=pendingMapPaint;pendingMapPaint=null;if(!pending)return;
+  const {map,layer,bounds}=pending,area={x0:Math.max(0,bounds.x0-1),y0:Math.max(0,bounds.y0-1),x1:Math.min(map.width-1,bounds.x1+1),y1:Math.min(map.height-1,bounds.y1+1)};
+  resolveMapTerrain(map,layer,workspace,area);
+  if(draw&&state.view==='map'&&currentMap()===map){const span=state.mapSpans||{x:1,y:1};drawMapRegion({...area,x1:area.x1+span.x-1,y1:area.y1+span.y-1});}
+}
 function updateCanvas() {
   if(!$('#art-canvas'))return;
-  const s=dimensions();if(state.view==='map')state.mapFrame=renderTilemap(currentMap(),workspace,state.animationPlaying?performance.now()/1000:0);paintCanvas($('#art-canvas'),state.view==='pixel'?composite(s):state.view==='map'?state.mapFrame.pixels:s.pixels,s.width,s.height);
+  flushMapPaint(false);
+  const s=dimensions();if(state.view==='map'){state.mapSpans=mapSpans();state.mapAnimations=mapAnimationCells(currentMap(),workspace);state.mapFrame=renderTilemap(currentMap(),workspace,state.animationPlaying?performance.now()/1000:0);}paintCanvas($('#art-canvas'),state.view==='pixel'?composite(s):state.view==='map'?state.mapFrame.pixels:s.pixels,s.width,s.height);
   $('#canvas-dimensions').textContent=`${s.width} × ${s.height}`;
-  positionCanvas();drawOverlay(); if(state.view==='pixel')drawThumbnails(); else if(state.view==='tiles')drawTilePreview();else paintCanvas($('#map-navigator'),state.mapFrame.pixels,s.width,s.height);
+  positionCanvas(); if(state.view==='pixel')drawThumbnails(); else if(state.view==='tiles')drawTilePreview();else drawMapNavigator();
 }
 function drawRepeatPreview() {
   const preview=$('#repeat-preview'),stage=$('#stage');if(!preview||!stage)return;
@@ -338,12 +400,20 @@ function positionCanvas() {
 function drawOverlay() {
   const canvas=$('#selection-canvas');if(!canvas)return;
   const d=dimensions(),scale=Math.max(.25,Math.min(state.zoom,12,2048/Math.max(d.width,d.height)));
-  canvas.width=Math.ceil(d.width*scale);canvas.height=Math.ceil(d.height*scale);
-  const ctx=canvas.getContext('2d');ctx.scale(scale,scale);
-  if((state.view!=='map'&&settings().grid&&state.zoom>=4)||(state.view==='map'&&settings().mapGrid)) {
+  const width=Math.ceil(d.width*scale),height=Math.ceil(d.height*scale);
+  if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+  const ctx=canvas.getContext('2d');ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,width,height);ctx.setLineDash([]);ctx.globalAlpha=1;ctx.imageSmoothingEnabled=false;ctx.scale(scale,scale);
+  if(state.view==='map'&&settings().mapGrid){
+    const m=currentMap(),key=`${width}:${height}:${scale}:${m.cellWidth}:${m.cellHeight}`;
+    if(state.mapGridKey!==key){
+      state.mapGridKey=key;mapGridTexture.width=width;mapGridTexture.height=height;const grid=mapGridTexture.getContext('2d');grid.scale(scale,scale);
+      grid.beginPath();grid.strokeStyle='rgba(41,47,50,.15)';grid.lineWidth=1/scale;
+      for(let x=0;x<=d.width;x+=m.cellWidth){grid.moveTo(x,0);grid.lineTo(x,d.height);}for(let y=0;y<=d.height;y+=m.cellHeight){grid.moveTo(0,y);grid.lineTo(d.width,y);}grid.stroke();
+    }
+    ctx.drawImage(mapGridTexture,0,0,width/scale,height/scale);
+  }else if(state.view!=='map'&&settings().grid&&state.zoom>=4){
     ctx.beginPath();ctx.strokeStyle='rgba(41,47,50,.15)';ctx.lineWidth=1/scale;
-    const stepX=state.view==='map'?currentMap().cellWidth:1,stepY=state.view==='map'?currentMap().cellHeight:1;
-    for(let x=0;x<=d.width;x+=stepX){ctx.moveTo(x,0);ctx.lineTo(x,d.height);}for(let y=0;y<=d.height;y+=stepY){ctx.moveTo(0,y);ctx.lineTo(d.width,y);}ctx.stroke();
+    for(let x=0;x<=d.width;x++){ctx.moveTo(x,0);ctx.lineTo(x,d.height);}for(let y=0;y<=d.height;y++){ctx.moveTo(0,y);ctx.lineTo(d.width,y);}ctx.stroke();
   }
   if(state.view==='pixel'&&state.selection) {
     const mask=state.selection,w=d.width,h=d.height;ctx.fillStyle='rgba(159,190,221,.23)';ctx.beginPath();
@@ -355,7 +425,7 @@ function drawOverlay() {
   }
   const preview=mapDecalPreview();
   if(preview){
-    paintCanvas(mapPreviewTexture,preview.image.pixels,preview.image.width,preview.image.height);
+    if(state.mapPreviewImage!==preview.image){paintCanvas(mapPreviewTexture,preview.image.pixels,preview.image.width,preview.image.height);state.mapPreviewImage=preview.image;}
     ctx.globalAlpha=.58;ctx.drawImage(mapPreviewTexture,preview.x,preview.y);ctx.globalAlpha=1;
     ctx.strokeStyle='#d7efae';ctx.lineWidth=1/scale;ctx.setLineDash([4/scale,3/scale]);ctx.strokeRect(preview.x,preview.y,preview.image.width,preview.image.height);ctx.setLineDash([]);
   }
@@ -369,8 +439,8 @@ function updateSelectionTransforms(count=state.selection?.reduce((n,v)=>n+v,0)||
 function mapDecalPreview(point=state.cursor){
   if(state.view!=='map'||state.mapTool!=='paint'||state.drag||!point)return null;
   const p=point,m=currentMap();if(p.x<0||p.y<0||p.x>=m.width*m.cellWidth||p.y>=m.height*m.cellHeight)return null;
-  const brush=mapBrushOptions().find(b=>b.id===state.mapTile);if(brush?.kind!=='pattern')return null;
-  return {image:patternImage(brush),x:Math.floor(p.x/m.cellWidth)*m.cellWidth,y:Math.floor(p.y/m.cellHeight)*m.cellHeight};
+  const brush=state.mapBrushes?.find(b=>b.id===state.mapTile);if(brush?.kind!=='pattern')return null;
+  return {image:state.mapBrushImages.get(brush.id),x:Math.floor(p.x/m.cellWidth)*m.cellWidth,y:Math.floor(p.y/m.cellHeight)*m.cellHeight};
 }
 function fitCanvas() {
   const stage=$('#stage'), d=dimensions();if(!stage)return;
@@ -426,7 +496,7 @@ function bindStage() {
   });
   stage.addEventListener('pointermove',e=>{
     const p=canvasPoint(e);state.cursor=p;updateCursor();
-    if(state.view==='map'&&!state.drag)drawOverlay();
+    if(state.view==='map'&&!state.drag){const m=currentMap(),key=`${Math.floor(p.x/m.cellWidth)}:${Math.floor(p.y/m.cellHeight)}:${state.mapTool}:${state.mapTile}`;if(state.mapHoverKey!==key){state.mapHoverKey=key;drawOverlay();}}
     const d=dimensions();const label=$('#pointer-status');if(label)label.innerHTML=`${icon(state.view==='tiles'?'tiles':toolList.find(t=>t[0]===state.tool)?.[1]||'pencil')}<span>${p.x>=0&&p.y>=0&&p.x<d.width&&p.y<d.height?`X: ${p.x} <span class="coordinate-y">Y: ${p.y}</span>`:state.view==='tiles'?'Auto terrain preview':toolList.find(t=>t[0]===state.tool)?.[2]}</span>`;
     const drag=state.drag;if(!drag)return;
     if(drag.type==='pan'){state.pan.x=drag.pan.x+e.clientX-drag.clientX;state.pan.y=drag.pan.y+e.clientY-drag.clientY;positionCanvas();return;}
@@ -438,9 +508,9 @@ function bindStage() {
     } else if(drag.type==='rect'||drag.type==='ellipse'){state.selection=shapeSelection(d.width,d.height,drag.start.x,drag.start.y,p.x,p.y,drag.type==='ellipse');drawOverlay();}
     else if(drag.type==='move'){const moved=translatePixels(drag.pixels,d.width,d.height,p.x-drag.start.x,p.y-drag.start.y,drag.selection);layer().pixels=moved.pixels;state.selection=moved.selection;updateCanvas();}
   });
-  const end=e=>{if(state.drag?.type==='line'&&e.type==='pointerup')previewLine(canvasPoint(e));if(state.drag&&['draw','line','move','map-draw','map-rect'].includes(state.drag.type)){changed();if(state.view==='map'){renderRight();if(state.mapFrame)paintCanvas($('#map-navigator'),state.mapFrame.pixels,state.mapFrame.width,state.mapFrame.height);}}state.drag=null;stage.classList.remove('dragging');};
+  const end=e=>{if(state.view==='map')flushMapPaint();if(state.drag?.type==='line'&&e.type==='pointerup')previewLine(canvasPoint(e));if(state.drag&&['draw','line','move','map-draw','map-rect'].includes(state.drag.type)){changed();if(state.view==='map'){state.mapAnimations=mapAnimationCells(currentMap(),workspace);renderRight();drawMapNavigator();}}state.drag=null;if(state.view==='map')drawOverlay();stage.classList.remove('dragging');};
   stage.addEventListener('pointerup',end);stage.addEventListener('pointercancel',end);stage.addEventListener('lostpointercapture',end);
-  stage.addEventListener('pointerleave',()=>{state.cursor=null;updateCursor();});
+  stage.addEventListener('pointerleave',()=>{state.cursor=null;state.mapHoverKey=null;updateCursor();if(state.view==='map')drawOverlay();});
 }
 
 function showDialog(title, subtitle, content, submitLabel, onSubmit, wide = false) {
@@ -470,12 +540,12 @@ function libraryDialog() {
   closeDialog();if(state.view!=='library')setView('library');else renderLibraryPage();
 }
 function renderLibraryPage() {
-  $('#app').innerHTML=`${headerMarkup()}<div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<span>Library</span></div><div id="save-status"></div></div><main class="library-page"><div class="library-page-heading"><div><span class="eyebrow">YOUR PIXEL UNIVERSE</span><h1>Your little collection<span>.</span></h1><p>Every sprite, every tile, every world. All in one place.</p></div><span class="library-total">${allAssets().length}<small>saved assets</small></span></div><div class="library-creation"><button data-action="new">${icon('pencil')}<span><strong>New sprite</strong><small>Start with a single pixel</small></span>${icon('plus')}</button><button data-action="new-tileset">${icon('tiles')}<span><strong>New auto terrain</strong><small>Generate terrain transitions</small></span>${icon('plus')}</button><button data-action="new-collection">${icon('folder')}<span><strong>New tileset</strong><small>Collect auto terrains for Godot 4</small></span>${icon('plus')}</button><button data-action="new-map">${icon('grid')}<span><strong>New tilemap</strong><small>Build somewhere new</small></span>${icon('plus')}</button></div><div class="library-browse-bar"><div class="library-filters">${[['all','All assets'],['sprite','Sprites'],['tileset','Auto terrains'],['tilemap','Tilemaps']].map(([kind,name])=>`<button class="${state.libraryFilter===kind?'active':''}" data-action="library-filter" data-kind="${kind}">${name}<span>${kind==='all'?allAssets().length:allAssets().filter(a=>a.kind===kind).length}</span></button>`).join('')}</div><input id="library-search" type="search" placeholder="Find something you made…" aria-label="Search library" value="${escape(state.librarySearch)}"/><div class="library-imports">${button('import-image','upload','Image','button outlined')}${button('import-atlas','tiles','Tileset','button outlined')}</div></div><section class="tileset-collections">${sectionTitle('TILESET COLLECTIONS')}<p class="field-note">Combine auto terrains into one Godot 4 TileSet. Each terrain supplies its generated transitions.</p><div class="collection-list">${workspace.collections.map(c=>`<article><strong>${escape(c.name)}</strong><span>${c.terrainIds.length} terrains</span>${button('edit-collection','pencil','Edit','button outlined',`data-id="${c.id}"`)}${button('export-collection','download','Godot 4','button accent',`data-id="${c.id}"`)}${iconButton('delete-collection','trash','Delete collection',`data-id="${c.id}"`)}</article>`).join('')||'<p class="field-note">Create a tileset to choose which terrains belong together.</p>'}</div></section><div id="library-results"></div></main>${footerMarkup()}`;
+  $('#app').innerHTML=`${headerMarkup()}<div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<span>Library</span></div><div id="save-status"></div></div><main class="library-page"><div class="library-page-heading"><div><span class="eyebrow">YOUR PIXEL UNIVERSE</span><h1>Your little collection<span>.</span></h1><p>Every sprite, every tile, every world. All in one place.</p></div><span class="library-total">${allAssets().length}<small>saved assets</small></span></div><div class="library-creation"><button data-action="new">${icon('pencil')}<span><strong>New sprite</strong><small>Start with a single pixel</small></span>${icon('plus')}</button><button data-action="new-tileset">${icon('tiles')}<span><strong>New auto terrain</strong><small>Generate terrain transitions</small></span>${icon('plus')}</button><button data-action="new-collection">${icon('folder')}<span><strong>New tileset</strong><small>Collect auto terrains for Godot 4</small></span>${icon('plus')}</button><button data-action="new-map">${icon('grid')}<span><strong>New tilemap</strong><small>Build somewhere new</small></span>${icon('plus')}</button></div><div class="library-browse-bar"><div class="library-filters">${[['all','All assets'],['sprite','Sprites'],['tileset','Auto terrains'],['tilemap','Tilemaps']].map(([kind,name])=>`<button class="${state.libraryFilter===kind?'active':''}" data-action="library-filter" data-kind="${kind}">${name}<span>${kind==='all'?allAssets().length:allAssets().filter(a=>a.kind===kind).length}</span></button>`).join('')}</div>${categoryFilter('library-category','library')}<input id="library-search" type="search" placeholder="Find something you made…" aria-label="Search library" value="${escape(state.librarySearch)}"/><div class="library-imports">${button('import-image','upload','Image','button outlined')}${button('import-atlas','tiles','Tileset','button outlined')}</div></div><section class="tileset-collections">${sectionTitle('TILESET COLLECTIONS')}<p class="field-note">Combine auto terrains into one Godot 4 TileSet. Each terrain supplies its generated transitions.</p><div class="collection-list">${workspace.collections.map(c=>`<article><strong>${escape(c.name)}</strong><span>${c.terrainIds.length} terrains</span>${button('edit-collection','pencil','Edit','button outlined',`data-id="${c.id}"`)}${button('export-collection','download','Godot 4','button accent',`data-id="${c.id}"`)}${iconButton('delete-collection','trash','Delete collection',`data-id="${c.id}"`)}</article>`).join('')||'<p class="field-note">Create a tileset to choose which terrains belong together.</p>'}</div></section><div id="library-results"></div></main>${footerMarkup()}`;
   renderLibraryResults();updateSaveStatus();
 }
 function renderLibraryResults() {
-  const assets=allAssets().filter(a=>(state.libraryFilter==='all'||a.kind===state.libraryFilter)&&a.name.toLowerCase().includes(state.librarySearch.toLowerCase()));
-  $('#library-results').innerHTML=assets.length?`<div class="library-grid">${assets.map(a=>`<article class="library-card"><button class="library-open" data-action="open-tab" data-id="${a.id}"><span class="library-preview checker"><canvas data-asset-preview="${a.id}"></canvas><span class="file-badge">${(a.kind==='tileset'?(a.imported?'TILE ATLAS':'AUTO TERRAIN'):a.kind.toUpperCase())}</span></span><strong>${escape(a.name)}</strong><span>${a.width} × ${a.height} ${a.kind==='tilemap'?'cells':'px'}${a.layers?` · ${a.layers.length} layers`:` · ${a.masks.length} tiles`}</span></button><div class="library-card-actions">${button('duplicate-asset','copy','Duplicate','text-button',`data-id="${a.id}"`)}${iconButton('delete-asset','trash',`Delete ${a.name}`,`data-id="${a.id}" ${workspace.sprites.length===1&&a.kind==='sprite'?'disabled':''}`)}</div></article>`).join('')}</div>`:'<div class="library-empty"><h2>Room for something new.</h2><p>No assets match this view. Create a document or try another search.</p></div>';
+  const assets=allAssets().filter(a=>(state.libraryFilter==='all'||a.kind===state.libraryFilter)&&(currentCategory('library')==='*'||a.kind==='sprite'&&cleanCategory(a.category)===currentCategory('library'))&&a.name.toLowerCase().includes(state.librarySearch.toLowerCase()));
+  $('#library-results').innerHTML=assets.length?`<div class="library-grid">${assets.map(a=>`<article class="library-card"><button class="library-open" data-action="open-tab" data-id="${a.id}"><span class="library-preview checker"><canvas data-asset-preview="${a.id}"></canvas><span class="file-badge">${(a.kind==='tileset'?(a.imported?'TILE ATLAS':'AUTO TERRAIN'):a.kind.toUpperCase())}</span></span><strong>${escape(a.name)}</strong><span>${a.width} × ${a.height} ${a.kind==='tilemap'?'cells':'px'}${a.layers?` · ${a.layers.length} layers`:` · ${a.masks.length} tiles`}</span></button><div class="library-card-actions">${a.kind==='sprite'?button('texture-category','folder',a.category||'Uncategorized','text-button category-assignment',`data-id="${a.id}"`):''}${button('duplicate-asset','copy','Duplicate','text-button',`data-id="${a.id}"`)}${iconButton('delete-asset','trash',`Delete ${a.name}`,`data-id="${a.id}" ${workspace.sprites.length===1&&a.kind==='sprite'?'disabled':''}`)}</div></article>`).join('')}</div>`:'<div class="library-empty"><h2>Room for something new.</h2><p>No assets match this view. Create a document or try another search.</p></div>';
   drawThumbnails();
 }
 function newDocumentDialog(){showDialog('What will you make?','Open a fresh document alongside your current work.',`<div class="new-document-options">${button('new','pencil','Pixel sprite','button outlined full-width')}${button('new-tileset','tiles','Auto terrain','button outlined full-width')}${button('new-collection','folder','Tileset collection','button outlined full-width')}${button('new-map','grid','Tilemap','button outlined full-width')}</div>`,null);}
@@ -545,7 +615,7 @@ function mapTextures(atlas){
 }
 function mapPaletteAtlas(){return workspace.tilesets.find(t=>t.id===(state.mapSourceId||currentMap().tilesetId));}
 function textureSelectionBrush(){
-  const m=currentMap(),s=workspace.sprites.find(s=>s.id===state.mapTextureId)||workspace.sprites[0];
+  const m=currentMap(),choices=mapTextureChoices(),s=choices.find(s=>s.id===state.mapTextureId)||choices[0];
   if(!s)return null;
   state.mapTextureId=s.id;
   const cols=Math.ceil(s.width/m.cellWidth),rows=Math.ceil(s.height/m.cellHeight),selection=state.textureSelection;
@@ -556,7 +626,7 @@ function textureSelectionBrush(){
 }
 function mapBrushOptions(){
   const atlas=mapPaletteAtlas();
-  if(!atlas)return [textureSelectionBrush(),...(currentMap().patterns||[]).map(p=>({...p,kind:'pattern'}))].filter(Boolean);
+  if(!atlas){const category=currentCategory('map'),ids=new Set(mapTextureChoices().map(s=>s.id));return [textureSelectionBrush(),...(currentMap().patterns||[]).filter(p=>category==='*'||p.tiles.some(t=>ids.has(t.assetId))).map(p=>({...p,kind:'pattern'}))].filter(Boolean);}
   const textures=atlas.id===currentMap().tilesetId&&currentMap().textures?currentMap().textures:mapTextures(atlas);
   return [...(atlas.imported?[]:textures.map((t,i)=>({id:i+1,name:t.name,image:t,kind:'terrain',value:i+1,assetId:atlas.id})).concat([{id:3,name:'Auto terrain · '+atlas.name,image:extractTile(atlas,tileDescriptors(atlas).find(t=>t.mask===(atlas.options.mode==='blob'?255:15))?.id??0),kind:'terrain',value:3,assetId:atlas.id}])),...tileDescriptors(atlas).map(t=>({id:100+t.id,name:`Tile ${t.id+1} · ${t.kind}`,image:null,tile:t.id,kind:'tile',value:t.id,assetId:atlas.id}))];
 }
@@ -571,20 +641,21 @@ function patternImage(pattern){
 }
 function renderMapLeft(){
   const atlas=mapPaletteAtlas(),brushes=mapBrushOptions(),m=currentMap(),collection=workspace.collections.find(c=>c.id===state.mapCollectionId);
+  state.mapBrushes=brushes;state.mapBrushImages=new Map();state.mapHoverKey=null;
   if(!brushes.some(b=>b.id===state.mapTile))state.mapTile=brushes[0]?.id;
   const palette=items=>items.map(t=>`<button data-action="map-tile" data-index="${t.id}" class="checker ${state.mapTile===t.id?'active':''}" title="${escape(t.name)}" aria-label="Paint ${escape(t.name)}" aria-pressed="${state.mapTile===t.id}"><canvas data-map-brush="${t.id}"></canvas><span>${t.kind==='tile'?t.value+1:escape(t.name)}</span></button>`).join('');
-  const texture=workspace.sprites.find(s=>s.id===state.mapTextureId)||workspace.sprites[0],selection=textureSelectionBrush(),selected=new Set(selection?.tiles.map(t=>t.value));
+  const selection=textureSelectionBrush(),texture=mapTextureChoices().find(s=>s.id===state.mapTextureId),selected=new Set(selection?.tiles.map(t=>t.value));
   $('#left-panel').innerHTML=`<section class="panel-section">${sectionTitle('MAP TOOLS')}<div class="map-tools">${[['paint','pencil','Paint'],['erase','eraser','Erase'],['fill','bucket','Fill'],['rect','select','Rectangle'],['picker','picker','Pick brush'],['pan','hand','Pan']].map(([id,glyph,name])=>`<button data-action="map-tool" data-tool="${id}" class="${state.mapTool===id?'active':''}" aria-pressed="${state.mapTool===id}">${icon(glyph)}<span>${name}</span></button>`).join('')}</div><p class="field-note">Mix terrains and texture patterns on any layer. Export the complete map as one PNG. Right-click erases.</p></section><section class="panel-section map-palette-section">${sectionTitle('TERRAINS & PATTERNS')}
-  <label class="field-label">Tileset collection<select id="map-collection"><option value="">All library terrains</option>${workspace.collections.map(c=>`<option value="${c.id}" ${collection?.id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}</select></label>
-  <label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>Texture tiles & patterns</option>${workspace.tilesets.filter(t=>!collection||collection.terrainIds.includes(t.id)).map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · tile atlas':' · auto terrain'}</option>`).join('')}</select></label>
-  ${!atlas?`<label class="field-label">Texture sheet<select id="map-texture">${spriteOptions(texture?.id)}</select></label><p class="field-note">${m.cellWidth} × ${m.cellHeight} px grid. Click a tile; Shift-click another to select a rectangular pattern. Paint stamps it; Fill and Rectangle repeat it. Partial edge tiles are transparent outside the image.</p><div class="texture-grid-scroll"><div class="texture-tile-grid" style="grid-template-columns:repeat(${Math.ceil(texture.width/m.cellWidth)},40px)">${textureTiles(texture,m.cellWidth,m.cellHeight).map(t=>`<button class="checker ${selected.has(t.id)?'active':''}" data-action="texture-tile" data-index="${t.id}" title="Tile ${t.id+1}" aria-label="Texture tile ${t.id+1}" aria-pressed="${selected.has(t.id)}"><canvas data-texture-tile="${t.id}"></canvas></button>`).join('')}</div></div>${button('save-map-pattern','plus','Save selected pattern','button outlined full-width')}<p class="field-label">SELECTED & SAVED PATTERNS</p>`:'<p class="field-note">Choose connected auto terrain or an individual tile.</p>'}
-  <div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${!atlas&&state.mapTile!=='selection'?button('delete-map-pattern','trash','Delete selected pattern','text-button'):''}${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit auto terrain','button outlined full-width')}</div>`:''}`;
-  document.querySelectorAll('[data-map-brush]').forEach(c=>{const b=brushes.find(b=>String(b.id)===c.dataset.mapBrush),t=b.kind==='pattern'?patternImage(b):b.image||extractTile(atlas,b.tile);paintCanvas(c,t.pixels,t.width,t.height);});
-  if(!atlas){const pixels=composite(texture);document.querySelectorAll('[data-texture-tile]').forEach(c=>{const t=textureTile(texture,m.cellWidth,m.cellHeight,Number(c.dataset.textureTile),pixels);paintCanvas(c,t.pixels,t.width,t.height);});}
+  ${categoryFilter('map-category','map')}<label class="field-label">Tileset collection<select id="map-collection"><option value="">All library terrains</option>${workspace.collections.map(c=>`<option value="${c.id}" ${collection?.id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}</select></label>
+  <label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>Texture tiles & patterns</option>${mapAtlasChoices().map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · tile atlas':' · auto terrain'}</option>`).join('')}</select></label>
+  ${!atlas&&texture?`<label class="field-label">Texture sheet<select id="map-texture">${spriteOptions(texture?.id,currentCategory('map'),false)}</select></label><p class="field-note">${m.cellWidth} × ${m.cellHeight} px grid. Click a tile; Shift-click another to select a rectangular pattern. Paint stamps it; Fill and Rectangle repeat it. Partial edge tiles are transparent outside the image.</p><div class="texture-grid-scroll"><div class="texture-tile-grid" style="grid-template-columns:repeat(${Math.ceil(texture.width/m.cellWidth)},40px)">${textureTiles(texture,m.cellWidth,m.cellHeight).map(t=>`<button class="checker ${selected.has(t.id)?'active':''}" data-action="texture-tile" data-index="${t.id}" title="Tile ${t.id+1}" aria-label="Texture tile ${t.id+1}" aria-pressed="${selected.has(t.id)}"><canvas data-texture-tile="${t.id}"></canvas></button>`).join('')}</div></div>${button('save-map-pattern','plus','Save selected pattern','button outlined full-width')}<p class="field-label">SELECTED & SAVED PATTERNS</p>`:!atlas?'<p class="field-note">No textures in this category. Assign textures in the Library or choose another category.</p>':'<p class="field-note">Choose connected auto terrain or an individual tile.</p>'}
+  <div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${!atlas&&m.patterns?.some(p=>p.id===state.mapTile)?button('delete-map-pattern','trash','Delete selected pattern','text-button'):''}${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit auto terrain','button outlined full-width')}</div>`:''}`;
+  document.querySelectorAll('[data-map-brush]').forEach(c=>{const b=brushes.find(b=>String(b.id)===c.dataset.mapBrush),t=b.kind==='pattern'?patternImage(b):b.image||extractTile(atlas,b.tile);state.mapBrushImages.set(b.id,t);paintCanvas(c,t.pixels,t.width,t.height);});
+  if(!atlas&&texture){const pixels=composite(texture);document.querySelectorAll('[data-texture-tile]').forEach(c=>{const t=textureTile(texture,m.cellWidth,m.cellHeight,Number(c.dataset.textureTile),pixels);paintCanvas(c,t.pixels,t.width,t.height);});}
 }
 function selectedMapBrush(){
-  const m=currentMap(),b=mapBrushOptions().find(b=>b.id===state.mapTile);
-  if(!b)return {source:0,kind:'tile',value:0};
+  const m=currentMap(),b=state.mapBrushes?.find(b=>b.id===state.mapTile);
+  if(!b)return null;
   const resolve=b=>{
     if(b.kind!=='texture-tile'&&b.assetId===m.tilesetId)return {...b,source:0};
     m.sources ||= [];
@@ -631,25 +702,29 @@ function mapPointerDown(p,e){
   if(tool==='picker'||(e.ctrlKey&&e.button!==2)){
     const i=y*m.width+x,type=l.terrain?.[i]||0,source=m.sources?.[(l.sources?.[i]||0)-1];
     if(type===4||(!type&&!l.cells[i]))return;
-    state.mapCollectionId='';state.mapSourceId=source?.kind==='texture'?'textures':source?.assetId||m.tilesetId;
+    state.mapCategory='*';state.mapCollectionId='';state.mapSourceId=source?.kind==='texture'?'textures':source?.assetId||m.tilesetId;
     if(type===7||type===6){state.mapTextureId=source.assetId;state.textureSelection={assetId:source.assetId,start:Math.max(0,l.cells[i]-1),end:Math.max(0,l.cells[i]-1)};state.mapTile='selection';renderMapLeft();return;}
     state.mapTile=type===6?source.assetId:type===5?3:type||100+l.cells[i]-1;renderMapLeft();return;
   }
   if(!l.visible){toast('Show the active map layer before painting.');return;}
+  if(tool!=='erase'&&!state.mapBrushes?.some(b=>b.id===state.mapTile))return;
   const atlas=mapPaletteAtlas(),textures=m.textures||(atlas?.id===m.tilesetId&&!atlas.imported?mapTextures(atlas):null);
   checkCapacity((l.terrain?0:m.width*m.height)+(l.sources?0:m.width*m.height)+(m.textures||!textures?0:textures.reduce((n,t)=>n+t.width*t.height,0)));
   checkpoint();if(textures)m.textures=textures;
-  const brush=selectedMapBrush();if(brush.kind==='pattern'&&['fill','rect'].includes(tool))brush.origin={x,y};
+  const brush=tool==='erase'?{}:selectedMapBrush();state.mapSpans=mapSpans();if(brush.kind==='pattern'&&['fill','rect'].includes(tool))brush.origin={x,y};
   if(tool==='erase'&&eraseMapDecal(l,p.x,p.y,workspace,m)){changed();updateCanvas();return;}
-  if(tool==='rect'){state.drag={type:'map-rect',start:{x,y},cells:new Uint32Array(l.cells),terrain:new Uint32Array(l.terrain||m.width*m.height),sources:new Uint32Array(l.sources||m.width*m.height),brush};paintMapBrush(m,l,x,y,brush,'rect');}
+  if(tool==='rect'){state.drag={type:'map-rect',last:{x,y},start:{x,y},cells:new Uint32Array(l.cells),terrain:new Uint32Array(l.terrain||m.width*m.height),sources:new Uint32Array(l.sources||m.width*m.height),brush};paintMapBrush(m,l,x,y,brush,'rect');}
   else {paintMapBrush(m,l,x,y,brush,tool);state.drag=tool==='fill'?null:{type:'map-draw',last:{x,y},tool,brush};}
-  resolveMapTerrain(m,l,workspace);if(!state.drag)changed();updateCanvas();
+  const bounds=tool==='fill'?{x0:0,y0:0,x1:m.width-1,y1:m.height-1}:{x0:x,y0:y,x1:x+(tool==='paint'&&brush.kind==='pattern'?brush.width-1:0),y1:y+(tool==='paint'&&brush.kind==='pattern'?brush.height-1:0)};
+  queueMapPaint(m,l,bounds);if(!state.drag){flushMapPaint();state.mapAnimations=mapAnimationCells(m,workspace);changed();}
 }
 function mapPointerMove(p){
   const m=currentMap(),l=currentMapLayer(),x=clamp(Math.floor(p.x/m.cellWidth),0,m.width-1),y=clamp(Math.floor(p.y/m.cellHeight),0,m.height-1),drag=state.drag;
-  if(drag.type==='map-rect'){l.cells=new Uint32Array(drag.cells);l.terrain=new Uint32Array(drag.terrain);l.sources=new Uint32Array(drag.sources);for(let py=Math.min(y,drag.start.y);py<=Math.max(y,drag.start.y);py++)for(let px=Math.min(x,drag.start.x);px<=Math.max(x,drag.start.x);px++)paintMapBrush(m,l,px,py,drag.brush,'rect');}
-  else {linePoints(drag.last.x,drag.last.y,x,y,(px,py)=>paintMapBrush(m,l,px,py,drag.brush,drag.tool));drag.last={x,y};}
-  resolveMapTerrain(m,l,workspace);updateCanvas();
+  if(x===drag.last.x&&y===drag.last.y)return;
+  let bounds=unionBounds({x0:x,y0:y,x1:x,y1:y},{x0:drag.last.x,y0:drag.last.y,x1:drag.last.x,y1:drag.last.y});
+  if(drag.type==='map-rect'){bounds=unionBounds(bounds,{x0:drag.start.x,y0:drag.start.y,x1:drag.start.x,y1:drag.start.y});l.cells=new Uint32Array(drag.cells);l.terrain=new Uint32Array(drag.terrain);l.sources=new Uint32Array(drag.sources);for(let py=Math.min(y,drag.start.y);py<=Math.max(y,drag.start.y);py++)for(let px=Math.min(x,drag.start.x);px<=Math.max(x,drag.start.x);px++)paintMapBrush(m,l,px,py,drag.brush,'rect');}
+  else {linePoints(drag.last.x,drag.last.y,x,y,(px,py)=>paintMapBrush(m,l,px,py,drag.brush,drag.tool));if(drag.tool!=='erase'&&drag.brush.kind==='pattern'){bounds.x1+=drag.brush.width-1;bounds.y1+=drag.brush.height-1;}}
+  drag.last={x,y};queueMapPaint(m,l,bounds);
 }
 function resizeMapDialog(){const m=currentMap();showDialog('Resize this world','Dimensions are in cells; content stays anchored at the top left.',sizeFields(m.width,m.height,256),'Resize tilemap',data=>{const w=Number(data.get('width')),h=Number(data.get('height'));checkCapacity((w*h-m.width*m.height)*m.layers.reduce((n,l)=>n+1+(l.terrain?1:0)+(l.sources?1:0),0));const next=resizeTilemap(m,w,h);for(const l of next.layers)resolveMapTerrain(next,l,workspace);checkpoint();workspace.tilemaps[workspace.tilemaps.findIndex(a=>a.id===m.id)]=next;changed();closeDialog();render();fitCanvas();});}
 function settingsDialog() {
@@ -687,7 +762,7 @@ function exportDialog() {
       for(const asset of [...workspace.tilesets,...workspace.sprites].filter(a=>sourceIds.has(a.id))){
         const image=`sources/${asset.id}.png`,pixels=asset.kind==='sprite'?{...asset,pixels:composite(asset)}:asset;
         files.push({name:image,data:await encodePNG(pixels)});
-        assets.push(asset.kind==='tileset'?{...atlasJSON(asset),id:asset.id,kind:asset.kind,name:asset.name,image}:{id:asset.id,kind:'texture',name:asset.name,width:asset.width,height:asset.height,image});
+        assets.push(asset.kind==='tileset'?{...atlasJSON(asset),id:asset.id,kind:asset.kind,name:asset.name,image}:{id:asset.id,kind:'texture',name:asset.name,...(asset.category?{category:asset.category}:{}),width:asset.width,height:asset.height,image});
       }
       const json={format:'pixfit-tilemap',version:4,...m,layers:m.layers.map(l=>({...l,cells:Array.from(l.cells),...(l.terrain?{terrain:Array.from(l.terrain)}:{}),...(l.sources?{sources:Array.from(l.sources)}:{})})),assets};
       files.push({name:'map.json',data:JSON.stringify(json,null,2)},{name:'map.png',data:await encodePNG(d)});
@@ -816,6 +891,7 @@ document.addEventListener('click',async e=>{
       case 'open-tab':openDocument(el.dataset.id);break;
       case 'close-tab':closeTab(el.dataset.id);break;
       case 'new-document':newDocumentDialog();break;
+      case 'texture-category':textureCategoryDialog(el.dataset.id);break;
       case 'new-tileset':newTileset();break;
       case 'new-collection':collectionDialog();break;
       case 'edit-collection':collectionDialog(el.dataset.id);break;
@@ -928,6 +1004,9 @@ document.addEventListener('pointerdown',e=>{if(e.target.id==='opacity'){checkpoi
 document.addEventListener('change',e=>{try{
   const el=e.target,id=el.id;
   if(el.dataset.borderOption){if(!el.checkValidity())throw new Error('Enter a value within the displayed range.');const key=el.dataset.borderOption;changeTile({[key]:el.type==='checkbox'?el.checked:el.type==='number'||['borderScale','borderRotation'].includes(key)?Number(el.value):el.value},el.dataset.borderSelected==='true');return;}
+  if(id==='library-category'){state.libraryCategory=el.value;renderLibraryResults();}
+  if(id==='terrain-category'){state.terrainCategory=el.value;renderLeft();renderRight();}
+  if(id==='map-category'){state.mapCategory=el.value;state.mapSourceId='textures';state.textureSelection=null;state.mapTile='selection';renderLeft();drawOverlay();}
   if(id==='theme-setting'){settings().theme=el.value;applyTheme();changed();}
   if(el.matches('.palette-color-picker'))el.closest('.palette-color-row').querySelector('[name="palette-color"]').value=el.value;
   if(el.name==='palette-color'&&/^#[0-9a-f]{6}$/i.test(el.value))el.closest('.palette-color-row').querySelector('.palette-color-picker').value=el.value;
@@ -949,7 +1028,7 @@ document.addEventListener('change',e=>{try{
   }
   if(id==='new-map-terrain'){const atlas=workspace.tilesets.find(t=>t.id===el.value);if(atlas){$('[name="cell-width"]').value=atlas.tileWidth;$('[name="cell-height"]').value=atlas.tileHeight;}}
   if(id==='map-texture'){state.mapTextureId=el.value;state.textureSelection=null;state.mapTile='selection';renderLeft();drawOverlay();}
-  if(id==='map-collection'){state.mapCollectionId=el.value;state.mapSourceId=workspace.collections.find(c=>c.id===el.value)?.terrainIds[0]||'textures';state.mapTile=3;renderLeft();}
+  if(id==='map-collection'){state.mapCollectionId=el.value;state.mapSourceId=mapAtlasChoices()[0]?.id||'textures';state.mapTile=3;renderLeft();}
   if(id==='map-tileset'){
     state.mapSourceId=el.value;state.mapTile=3;renderLeft();
   }
@@ -986,7 +1065,7 @@ document.addEventListener('keydown',e=>{try{
   if(key==='['||key===']'){settings().brushSize=clamp(settings().brushSize+(key==='['?-1:1),1,32);changed();renderLeft();}
 }catch(error){toast(error.message,true);}});
 document.addEventListener('keyup',e=>{if(e.key===' '){state.space=false;positionCanvas();}});
-window.addEventListener('blur',()=>{state.space=false;if(state.drag&&['draw','line','move','map-draw','map-rect'].includes(state.drag.type))changed();state.drag=null;});
+window.addEventListener('blur',()=>{flushMapPaint();state.space=false;if(state.drag&&['draw','line','move','map-draw','map-rect'].includes(state.drag.type))changed();state.drag=null;});
 window.addEventListener('resize',()=>{const d=dimensions(),stage=$('#stage');if(stage&&d.width*state.zoom>stage.clientWidth*1.3)fitCanvas();else positionCanvas();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&!state.saved)persist();});
 window.addEventListener('beforeunload',e=>{if(!state.saved){persist();e.preventDefault();e.returnValue='';}});
@@ -1009,9 +1088,15 @@ changed();
 let previousAnimation='';
 function animationTick(){
   if(!document.hidden&&state.animationPlaying&&!state.drag&&!$('#dialog').open){
-    const atlases=state.view==='tiles'?[state.tile]:state.view==='map'?workspace.tilesets.filter(t=>t.id===currentMap().tilesetId||currentMap().sources?.some(s=>s.assetId===t.id)):[];
-    const signature=state.view+':'+atlases.map(atlas=>atlas.id+':'+Object.keys(atlas.animations||{}).map(id=>animatedTileIndex(atlas,Number(id),performance.now()/1000)).join(',')).join(';');
-    if(signature!==previousAnimation){previousAnimation=signature;if(state.view==='tiles')drawTilePreview();else if(state.view==='map')updateCanvas();}
+    const time=performance.now()/1000;
+    if(state.view==='tiles'){
+      const frame=animatedTileIndex(state.tile,state.selectedTile,time),signature=`${state.tile.id}:${state.selectedTile}:${frame}`;
+      if(signature!==previousAnimation){previousAnimation=signature;drawTilePreview();}
+    }else if(state.view==='map'){
+      let bounds=null;
+      for(const cell of state.mapAnimations||[]){const frame=animatedTileIndex(cell.atlas,cell.id,time);if(cell.frame!==frame){cell.frame=frame;bounds=unionBounds(bounds,cell);}}
+      if(bounds)drawMapRegion(bounds);
+    }
   }
   requestAnimationFrame(animationTick);
 }

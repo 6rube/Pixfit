@@ -1,6 +1,7 @@
 import { encodePixels, decodePixels, MAX_SIZE } from './core.js';
 import { tileDescriptors } from './tiles.js';
 import { validateMapSize } from './tilemap.js';
+import { cleanCategory } from './categories.js';
 import { savedPalettes } from './palettes.js';
 
 export const MAX_WORKSPACE_PIXELS = 32_000_000;
@@ -33,7 +34,7 @@ export function parseWorkspace(data) {
     const width = size(s.width, MAX_SIZE), height = size(s.height, MAX_SIZE);
     if (!Array.isArray(s.layers) || !s.layers.length || s.layers.length > 32) throw new Error('Invalid layer count.');
     const layers = s.layers.map(l => ({ id: id(l.id), name: name(l.name), visible: l.visible !== false, opacity: Number.isFinite(l.opacity) ? Math.max(0, Math.min(100, l.opacity)) : 100, pixels: decode(l.pixels, width * height) }));
-    return { id: id(s.id), kind: 'sprite', name: name(s.name), width, height, layers, activeLayerId: layers.some(l => l.id === s.activeLayerId) ? s.activeLayerId : layers.at(-1).id, updatedAt: Number(s.updatedAt) || Date.now() };
+    return { id: id(s.id), kind: 'sprite', name: name(s.name), ...(cleanCategory(s.category)?{category:cleanCategory(s.category)}:{}), width, height, layers, activeLayerId: layers.some(l => l.id === s.activeLayerId) ? s.activeLayerId : layers.at(-1).id, updatedAt: Number(s.updatedAt) || Date.now() };
   });
   const tilesets = data.tilesets.map(t => {
     const width = size(t.width, 4096), height = size(t.height, 4096);
