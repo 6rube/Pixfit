@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/6rube/Pixfit/refs/heads/main/favicon.svg" width="100">
+
 # Pixfit
 
 A Pixelart toolset.
