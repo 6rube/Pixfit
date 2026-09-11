@@ -1,7 +1,7 @@
 import { encodePixels, decodePixels, MAX_SIZE } from './core.js';
 import { tileDescriptors } from './tiles.js';
 import { validateMapSize } from './tilemap.js';
-import { cleanCategory } from './categories.js';
+import { cleanCategory, textureCategories } from './categories.js';
 import { savedPalettes } from './palettes.js';
 
 export const MAX_WORKSPACE_PIXELS = 32_000_000;
@@ -10,7 +10,7 @@ export function workspacePixelCount(workspace) {
     + workspace.tilesets.reduce((n, t) => n + t.width * t.height, 0)
     + (workspace.tilemaps||[]).reduce((n,m)=>n+m.width*m.height*m.layers.length+m.layers.reduce((n,l)=>n+(l.terrain?.length||0)+(l.sources?.length||0),0)+(m.textures||[]).reduce((n,t)=>n+t.width*t.height,0)+(m.patterns||[]).reduce((n,p)=>n+p.tiles.length,0),0);
 }
-export const DEFAULT_SETTINGS = { theme: 'system', color: '#738b51', secondaryColor: '#f3dfb0', brushSize: 1, mirrorX: false, mirrorY: false, dither: false, grid: false, palette: 'woodland', pasteNewLayer: true, tile: { size: 16, columns: 8, mode: 'wang', border: 1, borderType:'dither', borderTexture:'', cutoff:0, slopes1:false, slopes2:false, overrides:{}, isometric: false, gap: false, terrainA: '', terrainB: '' } };
+export const DEFAULT_SETTINGS = { theme: 'system', textureCategory: '*', librarySort: 'type', color: '#738b51', secondaryColor: '#f3dfb0', brushSize: 1, mirrorX: false, mirrorY: false, dither: false, grid: false, palette: 'woodland', pasteNewLayer: true, tile: { size: 16, columns: 8, mode: 'wang', border: 1, borderType:'dither', borderTexture:'', cutoff:0, slopes1:false, slopes2:false, overrides:{}, isometric: false, gap: false, terrainA: '', terrainB: '' } };
 const validColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 export function serializeWorkspace(workspace) {
   return {
@@ -136,12 +136,14 @@ export function parseWorkspace(data) {
   settings.pasteNewLayer=raw.pasteNewLayer!==false;
   settings.mapGrid=raw.mapGrid!==false;
   settings.theme=['system','light','dark'].includes(raw.theme)?raw.theme:'system';
+  settings.textureCategory=typeof raw.textureCategory==='string'&&(raw.textureCategory==='*'||raw.textureCategory===''||textureCategories(sprites).includes(cleanCategory(raw.textureCategory)))?cleanCategory(raw.textureCategory):'*';
+  settings.librarySort=['type','name','recent'].includes(raw.librarySort)?raw.librarySort:'type';
   const palettes = { custom: Array.isArray(data.palettes?.custom) ? data.palettes.custom.filter(validColor).slice(0, 128) : [], saved:savedPalettes(data.palettes?.saved) };
   if(palettes.saved.some(p=>p.id===raw.palette))settings.palette=raw.palette;
   const activeId=sprites.some(s=>s.id===data.activeId)?data.activeId:sprites[0].id;
   const assetIds=new Set([...sprites,...tilesets,...tilemaps].map(a=>a.id)),rawSession=data.session||{};
   const tabs=Array.isArray(rawSession.tabs)?[...new Set(rawSession.tabs.filter(id=>assetIds.has(id)))].slice(0,100):[activeId];
-  const activeTab=tabs.includes(rawSession.activeTab)?rawSession.activeTab:tabs[0]||activeId;
+  const activeTab=tabs.includes(rawSession.activeTab)?rawSession.activeTab:tabs[0]||'';
   const session={tabs,activeTab,view:['pixel','tiles','map','library'].includes(rawSession.view)?rawSession.view:'pixel'};
   return { sprites, tilesets, collections, tilemaps, session, settings, palettes, activeId };
 }

@@ -45,8 +45,8 @@ function openDocument(id) {
   saveTabView();state.view=assetView(doc);state.selection=null;state.cursor=null;
   if(doc.kind==='sprite')workspace.activeId=id;
   if(doc.kind==='tileset'){state.tile=doc;settings().tile=structuredClone(doc.options);state.selectedTile=0;}
-  if(doc.kind==='tilemap'){state.mapCategory='*';state.mapId=id;state.mapSourceId=doc.tilesetId||'textures';state.mapTile=3;state.textureSelection=null;state.mapCollectionId='';}
-  rememberTab(doc);closeDialog();changed();render();
+  if(doc.kind==='tilemap'){state.mapPickedSourceId=null;state.mapId=id;state.mapSourceId=doc.tilesetId||'textures';state.mapTile=3;state.textureSelection=null;state.mapCollectionId='';}
+  rememberTab(doc);closeDialog();changed(false);render();
   const view=state.tabViews.get(id);if(view){state.zoom=view.zoom;state.pan=view.pan;state.selection=view.selection;positionCanvas();}else fitCanvas();
 }
 function checkCapacity(additionalPixels) { if (workspacePixelCount(workspace) + additionalPixels > MAX_WORKSPACE_PIXELS) throw new Error('This workspace can hold 32 million pixels across all layers and atlases. Export a backup and remove an unused asset to make room.'); }
@@ -79,9 +79,9 @@ function updateHistory() {
     const el = $(`[data-action="${action}"]`); if (el) el.disabled = disabled;
   }
 }
-function changed() {
+function changed(touchDocument=true) {
   if(state.view!=='library'){
-    const doc=activeDocument();if(doc){doc.updatedAt=Date.now();rememberTab(doc);}
+    const doc=activeDocument();if(doc){if(touchDocument)doc.updatedAt=Date.now();rememberTab(doc);}
     if(state.view==='tiles'&&state.tile?.id){const i=workspace.tilesets.findIndex(t=>t.id===state.tile.id);if(i>=0)workspace.tilesets[i]=state.tile;}
   }
   workspace.session.view=state.view;
@@ -112,7 +112,10 @@ function setView(view) {
 }
 function headerMarkup(){return `<header class="app-header"><a class="brand" href="./" aria-label="Pixfit home"><img src="./favicon.svg" alt="" width="34" height="34"/><span>pixfit<span class="brand-dot">.</span></span><span class="version">STUDIO</span></a><div class="header-actions">${button('library','folder','Library',`button quiet ${state.view==='library'?'active':''}`,`aria-current="${state.view==='library'?'page':'false'}"`)}${state.view==='library'?button('new','plus','New sprite','button dark'):button('export','download','Export','button dark')}${iconButton('settings','settings','Workspace settings')}</div></header>`;}
 function footerMarkup(){return `<footer class="app-footer"><span><span class="status-dot"></span>Local-first. Yours forever.</span><span>Everything stays in your browser</span><button data-action="help" class="footer-link">${icon('help')}Shortcuts & help</button></footer>`;}
-function tabsMarkup(){return `<div class="document-tabs" role="tablist" aria-label="Open documents">${workspace.session.tabs.map(id=>allAssets().find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="document-tab ${workspace.session.activeTab===a.id?'active':''}"><button role="tab" aria-selected="${workspace.session.activeTab===a.id}" data-action="open-tab" data-id="${a.id}">${icon(a.kind==='sprite'?'image':a.kind==='tileset'?'tiles':'grid')}<span>${escape(a.name)}</span></button>${iconButton('close-tab','close',`Close ${a.name}`,`data-id="${a.id}"`)}</div>`).join('')}<button class="new-tab" data-action="new-document" title="New document" aria-label="New document">${icon('plus')}</button></div>`;}
+function tabsMarkup(){
+  const active=id=>state.view!=='library'&&workspace.session.activeTab===id;
+  return `<div class="document-tabs" role="tablist" aria-label="Open documents">${button('close-all-tabs','close','Close all','close-all-tabs',workspace.session.tabs.length?'':'disabled')}${workspace.session.tabs.map(id=>allAssets().find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="document-tab ${active(a.id)?'active':''}" draggable="true" data-tab-id="${a.id}"><button role="tab" aria-selected="${active(a.id)}" data-action="open-tab" data-id="${a.id}" title="${escape(a.name)} · Drag to reorder, or press Alt + Arrow Left / Right" aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight">${icon(a.kind==='sprite'?'image':a.kind==='tileset'?'tiles':'grid')}<span>${escape(a.name)}</span></button>${iconButton('close-tab','close',`Close ${a.name}`,`data-id="${a.id}"`)}</div>`).join('')}<button class="new-tab" data-action="new-document" title="New document" aria-label="New document">${icon('plus')}</button></div>`;
+}
 function render() {
   applyTheme();
   if(state.view==='library'){renderLibraryPage();return;}
@@ -219,7 +222,7 @@ function renderRight() {
       <div class="layer-list">${[...s.layers].reverse().map(l => `<div class="layer-row ${l.id === active.id ? 'active' : ''}" data-layer="${l.id}"><button class="layer-pick" data-action="select-layer" data-id="${l.id}" aria-label="Select ${escape(l.name)}" aria-pressed="${l.id === active.id}"><span class="layer-thumb checker"><canvas data-layer-preview="${l.id}"></canvas></span><span class="layer-name">${escape(l.name)}<small>${l.id === active.id ? 'Active layer' : `${l.opacity}% opacity`}</small></span></button>${layerRowActions(s,l)}</div>`).join('')}</div>
       <div class="add-layer-bar">${button('add-layer','plus','Add layer','button outlined full-width')}</div>
     </section>
-    <section class="panel-section assets-section">${sectionTitle('IN YOUR LIBRARY', '<button class="text-link" data-action="library">View all</button>')}<div class="asset-strip">${workspace.sprites.filter(a => a.id !== s.id).slice(0,3).map(a => `<button class="mini-asset" data-action="open-sprite" data-id="${a.id}" title="Open ${escape(a.name)}"><span class="checker"><canvas data-asset-preview="${a.id}"></canvas></span><span>${escape(a.name)}</span></button>`).join('')}</div></section>`;
+    <section class="panel-section assets-section">${sectionTitle('IN YOUR LIBRARY', '<button class="text-link" data-action="library">View all</button>')}${categoryFilter('sprite-category')}<div class="asset-strip">${texturesInCategory(workspace.sprites,currentCategory()).filter(a => a.id !== s.id).slice(0,3).map(a => `<button class="mini-asset" data-action="open-sprite" data-id="${a.id}" title="Open ${escape(a.name)}"><span class="checker"><canvas data-asset-preview="${a.id}"></canvas></span><span>${escape(a.name)}</span></button>`).join('')}</div></section>`;
   drawThumbnails();
 }
 function rememberBorderDetails(){
@@ -260,7 +263,7 @@ function renderTilesLeft() {
   const opts = settings().tile;
   const source = (key, title, letter) => `<label class="source-label"><span><i>${letter}</i>${title}</span><select id="${key}" aria-label="${title}">${key === 'terrainB' ? '<option value="">Transparent</option>' : ''}${spriteOptions(opts[key])}</select></label>`;
   $('#left-panel').innerHTML = `
-    <section class="panel-section">${sectionTitle('TERRAIN SOURCES','<span class="key-hint">01</span>')}<p class="section-copy">Mix two textures. We’ll take care of the connections.</p>${categoryFilter('terrain-category','terrain')}${source('terrainA','Inner terrain','A')}${source('terrainB','Outer terrain','B')}<div class="terrain-samples"><div class="checker"><canvas id="terrain-a-preview"></canvas><span>Inside</span></div>${icon('swap')}<div class="checker"><canvas id="terrain-b-preview"></canvas><span>${opts.terrainB ? 'Outside' : 'Transparent'}</span></div></div>${button('import-terrain','upload','Import texture','text-button')}</section>
+    <section class="panel-section">${sectionTitle('TERRAIN SOURCES','<span class="key-hint">01</span>')}<p class="section-copy">Mix two textures. We’ll take care of the connections.</p>${categoryFilter('terrain-category')}${source('terrainA','Inner terrain','A')}${source('terrainB','Outer terrain','B')}<div class="terrain-samples"><div class="checker"><canvas id="terrain-a-preview"></canvas><span>Inside</span></div>${icon('swap')}<div class="checker"><canvas id="terrain-b-preview"></canvas><span>${opts.terrainB ? 'Outside' : 'Transparent'}</span></div></div>${button('import-terrain','upload','Import texture','text-button')}</section>
     <section class="panel-section">${sectionTitle('TILE CONFIGURATION','<span class="key-hint">02</span>')}<label class="field-label">Tile size<select id="tile-size">${[8,16,32,64].map(n=>`<option value="${n}" ${opts.size===n?'selected':''}>${n} × ${n} pixels</option>`).join('')}</select></label><label class="field-label">Compositing mode<select id="tile-mode"><option value="wang" ${opts.mode==='wang'?'selected':''}>16 tiles · Corner terrain</option><option value="blob" ${opts.mode==='blob'?'selected':''}>47 tiles · Blob autotile</option></select></label><label class="field-label">Atlas columns<select id="tile-columns">${[4,8,16].map(n=>`<option value="${n}" ${opts.columns===n?'selected':''}>${n} columns</option>`).join('')}</select></label></section>
     <section class="panel-section">${sectionTitle('TRANSITION BORDER','<span class="key-hint">03</span>')}<label class="field-label">Border type<select id="tile-border-type">${['none','dither','texture'].map(type=>`<option value="${type}" ${(opts.borderType||'dither')===type?'selected':''}>${{none:'Hard edge',dither:'Dithered blend',texture:'Transition texture'}[type]}</option>`).join('')}</select></label>${(opts.borderType==='texture')?`<label class="field-label">Transition texture<select id="tile-border-texture"><option value="">Choose a sprite…</option>${spriteOptions(opts.borderTexture)}</select></label>${borderTextureControls(opts)}`:''}<label class="range-row"><span>Border width</span><input id="tile-border" ${opts.borderType==='texture'&&opts.borderMapping==='native'?'disabled':''} type="range" min="0" max="${opts.size}" value="${opts.border}"/><output>${opts.borderType==='texture'&&opts.borderMapping==='native'?'native':opts.border+' px'}</output></label><label class="field-label">Cutoff / inset (pixels)<input id="tile-cutoff" type="number" min="-${opts.size}" max="${opts.size}" value="${opts.cutoff||0}"/></label><p class="field-note">Positive cutoff shrinks the inner terrain. Negative values expand it.</p></section>
     <section class="panel-section">${sectionTitle('SHAPES & PROJECTION')}<label class="checkbox-row"><input id="tile-slopes1" type="checkbox" ${opts.slopes1?'checked':''}/>Generate 1 × 1 slopes</label><label class="checkbox-row"><input id="tile-slopes2" type="checkbox" ${opts.slopes2?'checked':''}/>Generate 1 × 2 slopes</label><p class="field-note">Four directions per slope size. Rotate a tall slope to make it wide.</p><button data-action="tile-iso" class="toggle-row" aria-pressed="${opts.isometric}"><span>${icon('iso')}Isometric projection</span><span class="switch ${opts.isometric?'on':''}"></span></button><button data-action="tile-gap" class="toggle-row" aria-pressed="${opts.gap}"><span>${icon('grid')}1 px tile spacing</span><span class="switch ${opts.gap?'on':''}"></span></button></section>
@@ -276,15 +279,15 @@ function renderTilesRight() {
     <section class="panel-section">${sectionTitle('YOUR AUTO TERRAIN')}<dl class="spec-list"><div><dt>${t.imported?'Tiles imported':'Tiles generated'}</dt><dd>${t.masks.length}</dd></div><div><dt>Atlas size</dt><dd>${t.width} × ${t.height}</dd></div><div><dt>Projection</dt><dd>${t.imported?'Original image':settings().tile.isometric?'Isometric':'Orthogonal'}</dd></div><div><dt>Animations</dt><dd>${Object.keys(t.animations||{}).length}</dd></div></dl>${button('godot-export','download','Export to Godot 4','button accent full-width')}</section>`;
   drawTilePreview();drawBorderTexturePreviews();
 }
-function currentCategory(context){
-  const category=state[context+'Category']??'*';
+function currentCategory(){
+  const category=settings().textureCategory??'*';
   return category==='*'||category===''||textureCategories(workspace.sprites).includes(category)?category:'*';
 }
-function categoryFilter(id,context){
-  const value=currentCategory(context);
+function categoryFilter(id){
+  const value=currentCategory();
   return `<label class="field-label texture-category-filter">Texture category<select id="${id}"><option value="*" ${value==='*'?'selected':''}>All categories</option><option value="" ${value===''?'selected':''}>Uncategorized</option>${textureCategories(workspace.sprites).map(c=>`<option value="${escape(c)}" ${value===c?'selected':''}>${escape(c)}</option>`).join('')}</select></label>`;
 }
-function spriteOptions(selected,category=state.view==='tiles'?currentCategory('terrain'):'*',pin=true){
+function spriteOptions(selected,category=state.view==='tiles'?currentCategory():'*',pin=true){
   const visible=texturesInCategory(workspace.sprites,category),current=workspace.sprites.find(s=>s.id===selected),outside=current&&!visible.includes(current);
   return [...(pin&&outside?[current]:[]),...visible].map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${escape(s.name)}${pin&&outside&&s===current?' · current selection':''}</option>`).join('');
 }
@@ -296,10 +299,13 @@ function textureCategoryDialog(id){
     texture.updatedAt=Date.now();changed();closeDialog();if(state.view==='library')renderLibraryPage();else renderRight();
   });
 }
-function mapTextureChoices(){return texturesInCategory(workspace.sprites,currentCategory('map'));}
+function mapTextureChoices(){
+  const visible=texturesInCategory(workspace.sprites,currentCategory()),picked=workspace.sprites.find(s=>s.id===state.mapPickedSourceId);
+  return picked&&!visible.includes(picked)?[picked,...visible]:visible;
+}
 function mapAtlasChoices(){
-  const category=currentCategory('map'),textureIds=new Set(mapTextureChoices().map(s=>s.id)),collection=workspace.collections.find(c=>c.id===state.mapCollectionId);
-  return workspace.tilesets.filter(t=>(!collection||collection.terrainIds.includes(t.id))&&(category==='*'||textureIds.has(t.options.terrainA)||textureIds.has(t.options.terrainB)));
+  const category=currentCategory(),textureIds=new Set(mapTextureChoices().map(s=>s.id)),collection=workspace.collections.find(c=>c.id===state.mapCollectionId);
+  return workspace.tilesets.filter(t=>(!collection||collection.terrainIds.includes(t.id))&&(category==='*'||t.id===state.mapPickedSourceId||textureIds.has(t.options.terrainA)||textureIds.has(t.options.terrainB)));
 }
 
 function paintCanvas(canvas, pixels, width, height) {
@@ -540,12 +546,17 @@ function libraryDialog() {
   closeDialog();if(state.view!=='library')setView('library');else renderLibraryPage();
 }
 function renderLibraryPage() {
-  $('#app').innerHTML=`${headerMarkup()}<div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<span>Library</span></div><div id="save-status"></div></div><main class="library-page"><div class="library-page-heading"><div><span class="eyebrow">YOUR PIXEL UNIVERSE</span><h1>Your little collection<span>.</span></h1><p>Every sprite, every tile, every world. All in one place.</p></div><span class="library-total">${allAssets().length}<small>saved assets</small></span></div><div class="library-creation"><button data-action="new">${icon('pencil')}<span><strong>New sprite</strong><small>Start with a single pixel</small></span>${icon('plus')}</button><button data-action="new-tileset">${icon('tiles')}<span><strong>New auto terrain</strong><small>Generate terrain transitions</small></span>${icon('plus')}</button><button data-action="new-collection">${icon('folder')}<span><strong>New tileset</strong><small>Collect auto terrains for Godot 4</small></span>${icon('plus')}</button><button data-action="new-map">${icon('grid')}<span><strong>New tilemap</strong><small>Build somewhere new</small></span>${icon('plus')}</button></div><div class="library-browse-bar"><div class="library-filters">${[['all','All assets'],['sprite','Sprites'],['tileset','Auto terrains'],['tilemap','Tilemaps']].map(([kind,name])=>`<button class="${state.libraryFilter===kind?'active':''}" data-action="library-filter" data-kind="${kind}">${name}<span>${kind==='all'?allAssets().length:allAssets().filter(a=>a.kind===kind).length}</span></button>`).join('')}</div>${categoryFilter('library-category','library')}<input id="library-search" type="search" placeholder="Find something you made…" aria-label="Search library" value="${escape(state.librarySearch)}"/><div class="library-imports">${button('import-image','upload','Image','button outlined')}${button('import-atlas','tiles','Tileset','button outlined')}</div></div><section class="tileset-collections">${sectionTitle('TILESET COLLECTIONS')}<p class="field-note">Combine auto terrains into one Godot 4 TileSet. Each terrain supplies its generated transitions.</p><div class="collection-list">${workspace.collections.map(c=>`<article><strong>${escape(c.name)}</strong><span>${c.terrainIds.length} terrains</span>${button('edit-collection','pencil','Edit','button outlined',`data-id="${c.id}"`)}${button('export-collection','download','Godot 4','button accent',`data-id="${c.id}"`)}${iconButton('delete-collection','trash','Delete collection',`data-id="${c.id}"`)}</article>`).join('')||'<p class="field-note">Create a tileset to choose which terrains belong together.</p>'}</div></section><div id="library-results"></div></main>${footerMarkup()}`;
+  $('#app').innerHTML=`${headerMarkup()}${tabsMarkup()}<div class="workspace-bar"><div class="breadcrumbs"><span>Workspace</span>${icon('chevron')}<span>Library</span></div><div id="save-status"></div></div><main class="library-page"><div class="library-page-heading"><div><span class="eyebrow">YOUR PIXEL UNIVERSE</span><h1>Your little collection<span>.</span></h1><p>Every sprite, every tile, every world. All in one place.</p></div><span class="library-total">${allAssets().length}<small>saved assets</small></span></div><div class="library-creation"><button data-action="new">${icon('pencil')}<span><strong>New sprite</strong><small>Start with a single pixel</small></span>${icon('plus')}</button><button data-action="new-tileset">${icon('tiles')}<span><strong>New auto terrain</strong><small>Generate terrain transitions</small></span>${icon('plus')}</button><button data-action="new-collection">${icon('folder')}<span><strong>New tileset</strong><small>Collect auto terrains for Godot 4</small></span>${icon('plus')}</button><button data-action="new-map">${icon('grid')}<span><strong>New tilemap</strong><small>Build somewhere new</small></span>${icon('plus')}</button></div><div class="library-browse-bar"><div class="library-filters">${[['all','All assets'],['sprite','Sprites'],['tileset','Auto terrains'],['tilemap','Tilemaps']].map(([kind,name])=>`<button class="${state.libraryFilter===kind?'active':''}" data-action="library-filter" data-kind="${kind}">${name}<span>${kind==='all'?allAssets().length:allAssets().filter(a=>a.kind===kind).length}</span></button>`).join('')}</div>${categoryFilter('library-category')}<label class="field-label library-sort">Sort by<select id="library-sort">${[['type','Asset type'],['name','Name A–Z'],['recent','Recently edited']].map(([value,label])=>`<option value="${value}" ${(settings().librarySort||'type')===value?'selected':''}>${label}</option>`).join('')}</select></label><input id="library-search" type="search" placeholder="Find something you made…" aria-label="Search library" value="${escape(state.librarySearch)}"/><div class="library-imports">${button('import-image','upload','Image','button outlined')}${button('import-atlas','tiles','Tileset','button outlined')}</div></div><div id="library-results"></div>${workspace.collections.length?`<section class="tileset-collections">${sectionTitle('TILESET COLLECTIONS')}<p class="field-note">Combine auto terrains into one Godot 4 TileSet. Each terrain supplies its generated transitions.</p><div class="collection-list">${workspace.collections.map(c=>`<article><strong>${escape(c.name)}</strong><span>${c.terrainIds.length} terrains</span>${button('edit-collection','pencil','Edit','button outlined',`data-id="${c.id}"`)}${button('export-collection','download','Godot 4','button accent',`data-id="${c.id}"`)}${iconButton('delete-collection','trash','Delete collection',`data-id="${c.id}"`)}</article>`).join('')||'<p class="field-note">Create a tileset to choose which terrains belong together.</p>'}</div></section>`: ''}</main>${footerMarkup()}`;
   renderLibraryResults();updateSaveStatus();
 }
-function renderLibraryResults() {
-  const assets=allAssets().filter(a=>(state.libraryFilter==='all'||a.kind===state.libraryFilter)&&(currentCategory('library')==='*'||a.kind==='sprite'&&cleanCategory(a.category)===currentCategory('library'))&&a.name.toLowerCase().includes(state.librarySearch.toLowerCase()));
-  $('#library-results').innerHTML=assets.length?`<div class="library-grid">${assets.map(a=>`<article class="library-card"><button class="library-open" data-action="open-tab" data-id="${a.id}"><span class="library-preview checker"><canvas data-asset-preview="${a.id}"></canvas><span class="file-badge">${(a.kind==='tileset'?(a.imported?'TILE ATLAS':'AUTO TERRAIN'):a.kind.toUpperCase())}</span></span><strong>${escape(a.name)}</strong><span>${a.width} × ${a.height} ${a.kind==='tilemap'?'cells':'px'}${a.layers?` · ${a.layers.length} layers`:` · ${a.masks.length} tiles`}</span></button><div class="library-card-actions">${a.kind==='sprite'?button('texture-category','folder',a.category||'Uncategorized','text-button category-assignment',`data-id="${a.id}"`):''}${button('duplicate-asset','copy','Duplicate','text-button',`data-id="${a.id}"`)}${iconButton('delete-asset','trash',`Delete ${a.name}`,`data-id="${a.id}" ${workspace.sprites.length===1&&a.kind==='sprite'?'disabled':''}`)}</div></article>`).join('')}</div>`:'<div class="library-empty"><h2>Room for something new.</h2><p>No assets match this view. Create a document or try another search.</p></div>';
+function renderLibraryResults(){
+  const category=currentCategory(),sort=settings().librarySort||'type',kinds=['sprite','tileset','tilemap'],labels={sprite:'Sprites',tileset:'Auto terrains & tile atlases',tilemap:'Tilemaps'};
+  const byName=(a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'})||a.id.localeCompare(b.id);
+  const assets=allAssets().filter(a=>(state.libraryFilter==='all'||a.kind===state.libraryFilter)&&(category==='*'||a.kind!=='sprite'||cleanCategory(a.category)===category)&&a.name.toLowerCase().includes(state.librarySearch.trim().toLowerCase()));
+  assets.sort((a,b)=>sort==='recent'?(b.updatedAt||0)-(a.updatedAt||0)||byName(a,b):sort==='type'?kinds.indexOf(a.kind)-kinds.indexOf(b.kind)||byName(a,b):byName(a,b));
+  const card=a=>`<article class="library-card ${workspace.session.tabs.includes(a.id)?'is-open':''}"><button class="library-open" data-action="open-tab" data-id="${a.id}"><span class="library-preview checker"><canvas data-asset-preview="${a.id}"></canvas><span class="file-badge">${a.kind==='tileset'?(a.imported?'TILE ATLAS':'AUTO TERRAIN'):a.kind.toUpperCase()}</span>${workspace.session.tabs.includes(a.id)?'<span class="library-open-badge">Open</span>':''}</span><strong title="${escape(a.name)}">${escape(a.name)}</strong><span>${a.width} × ${a.height} ${a.kind==='tilemap'?'cells':'px'}${a.layers?` · ${a.layers.length} ${a.layers.length===1?'layer':'layers'}`:` · ${a.masks.length} tiles`}</span></button><div class="library-card-actions">${a.kind==='sprite'?button('texture-category','folder',a.category||'Uncategorized','text-button category-assignment',`data-id="${a.id}"`):''}${button('rename-asset','pencil','Rename','text-button',`data-id="${a.id}"`)}${button('duplicate-asset','copy','Duplicate','text-button',`data-id="${a.id}"`)}${iconButton('delete-asset','trash',`Delete ${a.name}`,`data-id="${a.id}" ${workspace.sprites.length===1&&a.kind==='sprite'?'disabled':''}`)}</div></article>`;
+  const groups=sort==='type'?kinds.map(kind=>[labels[kind],assets.filter(a=>a.kind===kind)]):[['Assets',assets]];
+  $('#library-results').innerHTML=assets.length?groups.filter(([,items])=>items.length).map(([label,items])=>`<section class="library-group"><div class="library-group-heading"><h2>${label}</h2><span>${items.length}</span></div><div class="library-grid">${items.map(card).join('')}</div></section>`).join(''):'<div class="library-empty"><h2>Room for something new.</h2><p>No assets match this view. Create a document or try another search.</p></div>';
   drawThumbnails();
 }
 function newDocumentDialog(){showDialog('What will you make?','Open a fresh document alongside your current work.',`<div class="new-document-options">${button('new','pencil','Pixel sprite','button outlined full-width')}${button('new-tileset','tiles','Auto terrain','button outlined full-width')}${button('new-collection','folder','Tileset collection','button outlined full-width')}${button('new-map','grid','Tilemap','button outlined full-width')}</div>`,null);}
@@ -576,9 +587,32 @@ function newTileset(sourceId=null){
   settings().tile={...settings().tile,overrides:{},terrainA:sourceId||settings().tile.terrainA};regenerate();rememberTab(state.tile);changed();closeDialog();render();fitCanvas();
 }
 function closeTab(id){
+  const index=workspace.session.tabs.indexOf(id);
+  if(index<0)return;
+  saveTabView();
   workspace.session.tabs=workspace.session.tabs.filter(tab=>tab!==id);state.tabViews.delete(id);
-  if(workspace.session.activeTab===id){const next=workspace.session.tabs.at(-1);if(next)openDocument(next);else{state.view='library';workspace.session.activeTab='';changed();render();}}
-  else {changed();render();}
+  if(workspace.session.activeTab===id){const next=workspace.session.tabs[Math.min(index,workspace.session.tabs.length-1)];if(next&&state.view!=='library')openDocument(next);else{state.view='library';workspace.session.activeTab=next||'';changed();render();}}
+  else {changed(false);render();}
+}
+function closeAllTabs(){
+  saveTabView();workspace.session.tabs=[];workspace.session.activeTab='';state.view='library';state.selection=null;state.cursor=null;state.tabViews.clear();
+  changed();render();toast('All tabs closed. Your assets are saved in the library.');
+}
+function moveTab(id,index){
+  const tabs=workspace.session.tabs,from=tabs.indexOf(id);if(from<0)return;
+  index=clamp(index,0,tabs.length-1);if(from===index)return;
+  tabs.splice(from,1);tabs.splice(index,0,id);changed(false);
+  $('.document-tabs').outerHTML=tabsMarkup();
+  $(`.document-tab [role="tab"][data-id="${id}"]`)?.focus();
+}
+function renameAssetDialog(id){
+  const asset=allAssets().find(a=>a.id===id);if(!asset)return;
+  showDialog('Name your document','Update its name in the library and open tabs.',nameField(asset.name),'Save name',data=>{
+    asset.name=data.get('name').trim()||'Untitled';asset.updatedAt=Date.now();
+    // Preserve this rename when an open document's pixel history is restored.
+    const h=state.history.get(id);if(h)for(const snapshot of [...h.undo,...h.redo])snapshot.name=asset.name;
+    changed();closeDialog();renderLibraryPage();
+  });
 }
 function copySelection(cut=false){
   const s=sprite();state.clipboard=selectionClipboard(layer().pixels,s.width,s.height,state.selection);
@@ -626,7 +660,7 @@ function textureSelectionBrush(){
 }
 function mapBrushOptions(){
   const atlas=mapPaletteAtlas();
-  if(!atlas){const category=currentCategory('map'),ids=new Set(mapTextureChoices().map(s=>s.id));return [textureSelectionBrush(),...(currentMap().patterns||[]).filter(p=>category==='*'||p.tiles.some(t=>ids.has(t.assetId))).map(p=>({...p,kind:'pattern'}))].filter(Boolean);}
+  if(!atlas){const category=currentCategory(),ids=new Set(mapTextureChoices().map(s=>s.id));return [textureSelectionBrush(),...(currentMap().patterns||[]).filter(p=>category==='*'||p.tiles.some(t=>ids.has(t.assetId))).map(p=>({...p,kind:'pattern'}))].filter(Boolean);}
   const textures=atlas.id===currentMap().tilesetId&&currentMap().textures?currentMap().textures:mapTextures(atlas);
   return [...(atlas.imported?[]:textures.map((t,i)=>({id:i+1,name:t.name,image:t,kind:'terrain',value:i+1,assetId:atlas.id})).concat([{id:3,name:'Auto terrain · '+atlas.name,image:extractTile(atlas,tileDescriptors(atlas).find(t=>t.mask===(atlas.options.mode==='blob'?255:15))?.id??0),kind:'terrain',value:3,assetId:atlas.id}])),...tileDescriptors(atlas).map(t=>({id:100+t.id,name:`Tile ${t.id+1} · ${t.kind}`,image:null,tile:t.id,kind:'tile',value:t.id,assetId:atlas.id}))];
 }
@@ -640,15 +674,16 @@ function patternImage(pattern){
   });return {width,height,pixels};
 }
 function renderMapLeft(){
+  if(state.mapSourceId!=='textures'&&!mapAtlasChoices().some(t=>t.id===(state.mapSourceId||currentMap().tilesetId)))state.mapSourceId='textures';
   const atlas=mapPaletteAtlas(),brushes=mapBrushOptions(),m=currentMap(),collection=workspace.collections.find(c=>c.id===state.mapCollectionId);
   state.mapBrushes=brushes;state.mapBrushImages=new Map();state.mapHoverKey=null;
   if(!brushes.some(b=>b.id===state.mapTile))state.mapTile=brushes[0]?.id;
   const palette=items=>items.map(t=>`<button data-action="map-tile" data-index="${t.id}" class="checker ${state.mapTile===t.id?'active':''}" title="${escape(t.name)}" aria-label="Paint ${escape(t.name)}" aria-pressed="${state.mapTile===t.id}"><canvas data-map-brush="${t.id}"></canvas><span>${t.kind==='tile'?t.value+1:escape(t.name)}</span></button>`).join('');
   const selection=textureSelectionBrush(),texture=mapTextureChoices().find(s=>s.id===state.mapTextureId),selected=new Set(selection?.tiles.map(t=>t.value));
   $('#left-panel').innerHTML=`<section class="panel-section">${sectionTitle('MAP TOOLS')}<div class="map-tools">${[['paint','pencil','Paint'],['erase','eraser','Erase'],['fill','bucket','Fill'],['rect','select','Rectangle'],['picker','picker','Pick brush'],['pan','hand','Pan']].map(([id,glyph,name])=>`<button data-action="map-tool" data-tool="${id}" class="${state.mapTool===id?'active':''}" aria-pressed="${state.mapTool===id}">${icon(glyph)}<span>${name}</span></button>`).join('')}</div><p class="field-note">Mix terrains and texture patterns on any layer. Export the complete map as one PNG. Right-click erases.</p></section><section class="panel-section map-palette-section">${sectionTitle('TERRAINS & PATTERNS')}
-  ${categoryFilter('map-category','map')}<label class="field-label">Tileset collection<select id="map-collection"><option value="">All library terrains</option>${workspace.collections.map(c=>`<option value="${c.id}" ${collection?.id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}</select></label>
+  ${categoryFilter('map-category')}<label class="field-label">Tileset collection<select id="map-collection"><option value="">All library terrains</option>${workspace.collections.map(c=>`<option value="${c.id}" ${collection?.id===c.id?'selected':''}>${escape(c.name)}</option>`).join('')}</select></label>
   <label class="field-label">Brush source<select id="map-tileset"><option value="textures" ${!atlas?'selected':''}>Texture tiles & patterns</option>${mapAtlasChoices().map(t=>`<option value="${t.id}" ${atlas?.id===t.id?'selected':''}>${escape(t.name)}${t.imported?' · tile atlas':' · auto terrain'}</option>`).join('')}</select></label>
-  ${!atlas&&texture?`<label class="field-label">Texture sheet<select id="map-texture">${spriteOptions(texture?.id,currentCategory('map'),false)}</select></label><p class="field-note">${m.cellWidth} × ${m.cellHeight} px grid. Click a tile; Shift-click another to select a rectangular pattern. Paint stamps it; Fill and Rectangle repeat it. Partial edge tiles are transparent outside the image.</p><div class="texture-grid-scroll"><div class="texture-tile-grid" style="grid-template-columns:repeat(${Math.ceil(texture.width/m.cellWidth)},40px)">${textureTiles(texture,m.cellWidth,m.cellHeight).map(t=>`<button class="checker ${selected.has(t.id)?'active':''}" data-action="texture-tile" data-index="${t.id}" title="Tile ${t.id+1}" aria-label="Texture tile ${t.id+1}" aria-pressed="${selected.has(t.id)}"><canvas data-texture-tile="${t.id}"></canvas></button>`).join('')}</div></div>${button('save-map-pattern','plus','Save selected pattern','button outlined full-width')}<p class="field-label">SELECTED & SAVED PATTERNS</p>`:!atlas?'<p class="field-note">No textures in this category. Assign textures in the Library or choose another category.</p>':'<p class="field-note">Choose connected auto terrain or an individual tile.</p>'}
+  ${!atlas&&texture?`<label class="field-label">Texture sheet<select id="map-texture">${spriteOptions(texture?.id,currentCategory(),!!state.mapPickedSourceId)}</select></label><p class="field-note">${m.cellWidth} × ${m.cellHeight} px grid. Click a tile; Shift-click another to select a rectangular pattern. Paint stamps it; Fill and Rectangle repeat it. Partial edge tiles are transparent outside the image.</p><div class="texture-grid-scroll"><div class="texture-tile-grid" style="grid-template-columns:repeat(${Math.ceil(texture.width/m.cellWidth)},40px)">${textureTiles(texture,m.cellWidth,m.cellHeight).map(t=>`<button class="checker ${selected.has(t.id)?'active':''}" data-action="texture-tile" data-index="${t.id}" title="Tile ${t.id+1}" aria-label="Texture tile ${t.id+1}" aria-pressed="${selected.has(t.id)}"><canvas data-texture-tile="${t.id}"></canvas></button>`).join('')}</div></div>${button('save-map-pattern','plus','Save selected pattern','button outlined full-width')}<p class="field-label">SELECTED & SAVED PATTERNS</p>`:!atlas?'<p class="field-note">No textures in this category. Assign textures in the Library or choose another category.</p>':'<p class="field-note">Choose connected auto terrain or an individual tile.</p>'}
   <div class="map-tile-palette terrain-brushes">${palette(brushes.filter(b=>b.kind!=='tile'))}</div>${!atlas&&m.patterns?.some(p=>p.id===state.mapTile)?button('delete-map-pattern','trash','Delete selected pattern','text-button'):''}${atlas?`<p class="field-label">ALL TILES · ${atlas.masks.length}</p><div class="map-tile-palette">${palette(brushes.filter(b=>b.kind==='tile'))}</div>`:''}</section>${atlas?`<div class="left-bottom">${button('edit-map-tileset','tiles','Edit auto terrain','button outlined full-width')}</div>`:''}`;
   document.querySelectorAll('[data-map-brush]').forEach(c=>{const b=brushes.find(b=>String(b.id)===c.dataset.mapBrush),t=b.kind==='pattern'?patternImage(b):b.image||extractTile(atlas,b.tile);state.mapBrushImages.set(b.id,t);paintCanvas(c,t.pixels,t.width,t.height);});
   if(!atlas&&texture){const pixels=composite(texture);document.querySelectorAll('[data-texture-tile]').forEach(c=>{const t=textureTile(texture,m.cellWidth,m.cellHeight,Number(c.dataset.textureTile),pixels);paintCanvas(c,t.pixels,t.width,t.height);});}
@@ -702,7 +737,7 @@ function mapPointerDown(p,e){
   if(tool==='picker'||(e.ctrlKey&&e.button!==2)){
     const i=y*m.width+x,type=l.terrain?.[i]||0,source=m.sources?.[(l.sources?.[i]||0)-1];
     if(type===4||(!type&&!l.cells[i]))return;
-    state.mapCategory='*';state.mapCollectionId='';state.mapSourceId=source?.kind==='texture'?'textures':source?.assetId||m.tilesetId;
+    state.mapPickedSourceId=source?.assetId||m.tilesetId;state.mapCollectionId='';state.mapSourceId=source?.kind==='texture'?'textures':source?.assetId||m.tilesetId;
     if(type===7||type===6){state.mapTextureId=source.assetId;state.textureSelection={assetId:source.assetId,start:Math.max(0,l.cells[i]-1),end:Math.max(0,l.cells[i]-1)};state.mapTile='selection';renderMapLeft();return;}
     state.mapTile=type===6?source.assetId:type===5?3:type||100+l.cells[i]-1;renderMapLeft();return;
   }
@@ -890,6 +925,8 @@ document.addEventListener('click',async e=>{
       case 'map':setView('map');break;
       case 'open-tab':openDocument(el.dataset.id);break;
       case 'close-tab':closeTab(el.dataset.id);break;
+      case 'close-all-tabs':closeAllTabs();break;
+      case 'rename-asset':renameAssetDialog(el.dataset.id);break;
       case 'new-document':newDocumentDialog();break;
       case 'texture-category':textureCategoryDialog(el.dataset.id);break;
       case 'new-tileset':newTileset();break;
@@ -1000,13 +1037,38 @@ document.addEventListener('click',async e=>{
   }catch(error){toast(error.message,true);}
 });
 let opacityEditing=false;
+let draggedTab=null;
+function clearTabDrop(){document.querySelectorAll('.document-tab.drop-before,.document-tab.drop-after').forEach(el=>el.classList.remove('drop-before','drop-after'));}
+document.addEventListener('dragstart',e=>{
+  const tab=e.target.closest('.document-tab');if(!tab)return;
+  draggedTab=tab.dataset.tabId;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',draggedTab);tab.classList.add('dragging');
+});
+document.addEventListener('dragover',e=>{
+  if(!draggedTab||!e.target.closest('.document-tabs'))return;
+  e.preventDefault();e.dataTransfer.dropEffect='move';clearTabDrop();
+  const tab=e.target.closest('.document-tab');if(tab&&tab.dataset.tabId!==draggedTab){const box=tab.getBoundingClientRect();tab.classList.add(e.clientX<box.x+box.width/2?'drop-before':'drop-after');}
+  const strip=e.target.closest('.document-tabs'),box=strip.getBoundingClientRect();
+  if(e.clientX>box.right-45)strip.scrollLeft+=20;else if(e.clientX<box.left+90)strip.scrollLeft-=20;
+});
+document.addEventListener('drop',e=>{
+  if(!draggedTab||!e.target.closest('.document-tabs'))return;
+  e.preventDefault();const id=draggedTab,tab=e.target.closest('.document-tab'),tabs=workspace.session.tabs;
+  let index=tabs.length-1;
+  if(tab){const box=tab.getBoundingClientRect();index=tabs.indexOf(tab.dataset.tabId)+(e.clientX>=box.x+box.width/2?1:0);if(tabs.indexOf(id)<index)index--;}
+  else if(e.target.closest('.close-all-tabs'))index=0;
+  draggedTab=null;clearTabDrop();document.querySelector('.document-tab.dragging')?.classList.remove('dragging');moveTab(id,index);
+});
+document.addEventListener('dragend',()=>{draggedTab=null;clearTabDrop();document.querySelector('.document-tab.dragging')?.classList.remove('dragging');});
 document.addEventListener('pointerdown',e=>{if(e.target.id==='opacity'){checkpoint();opacityEditing=true;}});
 document.addEventListener('change',e=>{try{
   const el=e.target,id=el.id;
   if(el.dataset.borderOption){if(!el.checkValidity())throw new Error('Enter a value within the displayed range.');const key=el.dataset.borderOption;changeTile({[key]:el.type==='checkbox'?el.checked:el.type==='number'||['borderScale','borderRotation'].includes(key)?Number(el.value):el.value},el.dataset.borderSelected==='true');return;}
-  if(id==='library-category'){state.libraryCategory=el.value;renderLibraryResults();}
-  if(id==='terrain-category'){state.terrainCategory=el.value;renderLeft();renderRight();}
-  if(id==='map-category'){state.mapCategory=el.value;state.mapSourceId='textures';state.textureSelection=null;state.mapTile='selection';renderLeft();drawOverlay();}
+  if(['library-category','terrain-category','map-category','sprite-category'].includes(id)){settings().textureCategory=el.value;state.mapPickedSourceId=null;changed(false);}
+  if(id==='sprite-category'){renderRight();}
+  if(id==='library-sort'){settings().librarySort=el.value;changed(false);renderLibraryResults();}
+  if(id==='library-category'){renderLibraryResults();}
+  if(id==='terrain-category'){renderLeft();renderRight();}
+  if(id==='map-category'){state.mapSourceId='textures';state.textureSelection=null;state.mapTile='selection';renderLeft();drawOverlay();}
   if(id==='theme-setting'){settings().theme=el.value;applyTheme();changed();}
   if(el.matches('.palette-color-picker'))el.closest('.palette-color-row').querySelector('[name="palette-color"]').value=el.value;
   if(el.name==='palette-color'&&/^#[0-9a-f]{6}$/i.test(el.value))el.closest('.palette-color-row').querySelector('.palette-color-picker').value=el.value;
@@ -1043,6 +1105,8 @@ document.addEventListener('input',e=>{
 document.addEventListener('keydown',e=>{try{
   if($('#dialog').open||e.target.closest('input,textarea,select,[contenteditable]'))return;
   const key=e.key.toLowerCase(),mod=e.ctrlKey||e.metaKey;
+  const tab=e.target.closest('.document-tab [role="tab"]');
+  if(tab&&e.altKey&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();moveTab(tab.dataset.id,workspace.session.tabs.indexOf(tab.dataset.id)+(e.key==='ArrowLeft'?-1:1));return;}
   if(key===' '){e.preventDefault();state.space=true;positionCanvas();return;}
   if(mod&&key==='s'){e.preventDefault();persist().then(()=>toast(state.saved?'Workspace saved in your browser.':'Export a backup to keep your work.',!state.saved));return;}
   if(state.view==='library')return;

@@ -22,7 +22,7 @@ const pixelCheck=async()=>{
 try{
   await page.addInitScript(data=>{if(!sessionStorage.getItem('category-fixture')){localStorage.setItem('pixfit-workspace',JSON.stringify(data));sessionStorage.setItem('category-fixture','1');}},serializeWorkspace(w));
   await page.goto('http://127.0.0.1:5173');await page.click(`[data-action="texture-category"][data-id="${w.sprites[2].id}"]`);await page.fill('[name="category"]','Forest');await page.click('#dialog button[type="submit"]');assert.equal((await saved()).sprites[2].category,'Forest');
-  await page.selectOption('#library-category','Forest');assert.equal(await page.locator('.library-card').count(),3);await page.selectOption('#library-category','*');
+  await page.selectOption('#library-category','Forest');assert.equal(await page.locator('.library-card').count(),5);await page.selectOption('#library-category','*');
   await page.locator('.library-open').filter({hasText:'Category terrain'}).click();await page.selectOption('#terrain-category','Water');assert.equal(await page.locator('#terrainA').inputValue(),w.sprites[0].id);assert.equal(await page.locator('#terrainB').inputValue(),w.sprites[1].id);assert.equal(await page.locator('#terrainA option').count(),2);
   await page.selectOption('#tile-border-type','texture');assert.equal(await page.locator('#tile-border-texture option').count(),2);await saved();
   await action('library');await page.locator('.library-open').filter({hasText:'Performance map'}).click();await action('play-animation');

@@ -49,6 +49,14 @@ Click the category button on a texture's Library card, or **Texture category** i
 
 Use **Texture category** in the auto terrain editor to filter inner, outer, and border texture choices. Current texture assignments remain selected when switching categories. In the tilemap editor, the same filter shows matching texture sheets, saved patterns, and terrains using those textures. **All categories** restores the complete list; changing the filter does not change painted cells.
 
+The selected category is shared by the Library, pixel editor, auto terrain editor, and tilemap editor, and is remembered after reload. In the Library it filters sprites; auto terrains and tilemaps remain available.
+
+### Library and document tabs
+
+The Library groups assets by type and name. **Sort by** also offers **Name A–Z** and **Recently edited**, and remembers your choice. Use **Rename** on a card to update its name in the Library and any open tab.
+
+Open tabs stay visible in the Library, and their assets show an **Open** badge. Drag tabs to reorder them, or focus a tab and press **Alt + Left/Right Arrow**. Tab order survives reload. **Close all** at the left of the tabs returns to the Library and keeps every saved asset.
+
 Tilemap painting batches redraws per browser frame, skips repeated moves within one cell, and resolves terrain only around edited cells. Partial image updates include overlapping slopes, decals, and layers. Grid and brush previews are reused, and only animations placed on visible layers trigger redraws. PNG exports still render the complete image.
 
 ## Run locally
@@ -79,6 +87,7 @@ node tests/browser.mjs
 node tests/patterns-browser.mjs
 node tests/border-textures-browser.mjs
 node tests/categories-performance-browser.mjs
+node tests/library-tabs-browser.mjs
 ```
 
 The browser check exercises editing, clipboard destinations, Ctrl picking, tabs, the full-page library, map painting/fill/layers, tile overrides, slopes, animation configuration, reload persistence, full backup restore, Godot downloads, PNG import/export, 512 pixel canvases, and narrow layouts. Screenshots and test exports are written to the ignored `.screenshots/` directory.
